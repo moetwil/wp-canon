@@ -5,10 +5,10 @@ Turn a WordPress site into an AI-ready content repo.
 ## What It Does
 
 - Connects to the WordPress REST API
-- Discovers post types
+- Discovers post types and taxonomies
 - Scaffolds content folders
 - Pulls posts into markdown
-- Generates a content index
+- Generates content and term indexes
 
 ## Why This Exists
 
@@ -34,7 +34,7 @@ WP_USERNAME=admin
 WP_APP_PASSWORD=your application password
 ```
 
-`npm run index` generates `data/content-index.json` with each item's title, slug, type, status, local file path, and internal links. This gives Claude/Codex a low-token overview of the website.
+`npm run pull` also generates `data/taxonomy-terms.json` with REST-visible term names, slugs, parents, and links. `npm run index` generates `data/content-index.json` with each item's title, slug, type, status, local file path, terms, internal links, and a compact `termIndex` that maps taxonomy terms back to local content. This gives Claude/Codex a low-token overview of the website and its SEO relationships.
 
 ## Local WordPress Development
 
@@ -78,7 +78,7 @@ Do not commit `.env`, content output, or data output.
 
 - Custom post type pulling
 - Better markdown cleanup
-- Internal link index
+- Better taxonomy and relationship index
 - Draft push back to WordPress
 - WooCommerce module
 - SEO plugin metadata support

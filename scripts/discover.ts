@@ -40,6 +40,7 @@ async function main() {
       slug,
       restBase: type.rest_base,
       name: type.name,
+      taxonomies: type.taxonomies ?? [],
     };
   });
 
@@ -48,12 +49,38 @@ async function main() {
     console.log(`- ${postType.slug} → ${postType.restBase} (${postType.name})`);
   }
 
+  const taxonomiesData = await fetchJson(
+    `${apiBase.wpV2}/taxonomies${apiBase.query}context=edit`,
+    {
+      headers: authHeaders,
+    }
+  );
+  const taxonomies = Object.entries(taxonomiesData)
+    .filter(([, taxonomy]: [string, any]) => {
+      return taxonomy.visibility?.show_in_rest === true && taxonomy.rest_base;
+    })
+    .map(([slug, taxonomy]: [string, any]) => {
+      return {
+        slug,
+        restBase: taxonomy.rest_base,
+        name: taxonomy.name,
+        hierarchical: taxonomy.hierarchical === true,
+        types: taxonomy.types ?? [],
+      };
+    });
+
+  console.log("Discovered taxonomies:");
+  for (const taxonomy of taxonomies) {
+    console.log(`- ${taxonomy.slug} → ${taxonomy.restBase} (${taxonomy.name})`);
+  }
+
   await mkdir("config", { recursive: true });
   await writeFile(
     "config/content-types.json",
     JSON.stringify(
       {
         postTypes,
+        taxonomies,
       },
       null,
       2

@@ -19,6 +19,18 @@ function extractInternalLinks(content: string, siteUrl: string) {
   });
 }
 
+async function readJson(path: string, fallback: any) {
+  try {
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch (error: any) {
+    if (error.code === "ENOENT") {
+      return fallback;
+    }
+
+    throw error;
+  }
+}
+
 async function findMarkdownFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const files: string[] = [];
@@ -36,17 +48,75 @@ async function findMarkdownFiles(dir: string): Promise<string[]> {
   return files;
 }
 
+function getRawTerms(data: any) {
+  if (data.taxonomies) {
+    return data.taxonomies;
+  }
+
+  return {
+    category: data.categories ?? [],
+    post_tag: data.tags ?? [],
+  };
+}
+
 async function main() {
   if (!WP_URL) {
     throw new Error("Missing WP_URL in .env");
   }
 
   const files = await findMarkdownFiles("content");
+  const taxonomyData = await readJson("data/taxonomy-terms.json", {
+    taxonomies: [],
+  });
+  const termsByKey = new Map<string, any>();
+  const termItems = new Map<string, any>();
   const items = [];
+
+  for (const taxonomy of taxonomyData.taxonomies) {
+    for (const term of taxonomy.terms) {
+      termsByKey.set(`${taxonomy.taxonomy}:${term.id}`, {
+        taxonomy: taxonomy.taxonomy,
+        id: term.id,
+        slug: term.slug,
+        name: term.name,
+        parent: term.parent,
+        link: term.link,
+      });
+    }
+  }
 
   for (const path of files) {
     const file = await readFile(path, "utf8");
     const parsed = matter(file);
+    const terms = [];
+
+    for (const [taxonomy, ids] of Object.entries(getRawTerms(parsed.data))) {
+      if (!Array.isArray(ids)) {
+        continue;
+      }
+
+      for (const id of ids) {
+        const term =
+          termsByKey.get(`${taxonomy}:${id}`) ?? {
+            taxonomy,
+            id,
+          };
+
+        terms.push(term);
+
+        const relationshipKey = `${taxonomy}:${id}`;
+        const relationship = termItems.get(relationshipKey) ?? {
+          taxonomy,
+          id,
+          slug: term.slug,
+          name: term.name,
+          items: [],
+        };
+
+        relationship.items.push(path);
+        termItems.set(relationshipKey, relationship);
+      }
+    }
 
     items.push({
       title: parsed.data.title,
@@ -55,6 +125,7 @@ async function main() {
       restBase: parsed.data.restBase,
       status: parsed.data.status,
       path,
+      terms,
       internalLinks: extractInternalLinks(parsed.content, WP_URL),
     });
   }
@@ -65,6 +136,7 @@ async function main() {
     JSON.stringify(
       {
         items,
+        termIndex: Array.from(termItems.values()),
       },
       null,
       2
