@@ -49,13 +49,10 @@ async function findMarkdownFiles(dir: string): Promise<string[]> {
 }
 
 function getRawTerms(data: any) {
-  if (data.taxonomies) {
-    return data.taxonomies;
-  }
-
   return {
     category: data.categories ?? [],
     post_tag: data.tags ?? [],
+    ...(data.taxonomies ?? {}),
   };
 }
 
@@ -73,13 +70,14 @@ async function main() {
   const items = [];
 
   for (const taxonomy of taxonomyData.taxonomies) {
+    const taxonomySlug = taxonomy.slug ?? taxonomy.taxonomy;
+
     for (const term of taxonomy.terms) {
-      termsByKey.set(`${taxonomy.taxonomy}:${term.id}`, {
-        taxonomy: taxonomy.taxonomy,
+      termsByKey.set(`${taxonomySlug}:${term.id}`, {
+        taxonomy: taxonomySlug,
         id: term.id,
         slug: term.slug,
         name: term.name,
-        parent: term.parent,
         link: term.link,
       });
     }

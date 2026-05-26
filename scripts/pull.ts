@@ -25,10 +25,33 @@ function getPostTerms(post: any, taxonomies: any[]) {
   for (const taxonomy of taxonomies) {
     const values = post[taxonomy.restBase] ?? post[taxonomy.slug] ?? [];
 
-    terms[taxonomy.slug] = Array.isArray(values) ? values : [];
+    terms[taxonomy.slug] = Array.isArray(values) ? [...values] : [];
   }
 
   return terms;
+}
+
+function getTaxonomies(config: any) {
+  const configured = config.taxonomies ?? [];
+
+  if (configured.length > 0) {
+    return configured.filter((taxonomy: any) => taxonomy.restBase);
+  }
+
+  return [
+    {
+      slug: "category",
+      restBase: "categories",
+      name: "Categories",
+      types: ["post"],
+    },
+    {
+      slug: "post_tag",
+      restBase: "tags",
+      name: "Tags",
+      types: ["post"],
+    },
+  ];
 }
 
 async function main() {
@@ -37,7 +60,7 @@ async function main() {
   const postTypes = config.postTypes.filter((type: any) => {
     return type.restBase !== "media";
   });
-  const taxonomies = config.taxonomies ?? [];
+  const taxonomies = getTaxonomies(config);
   const authHeaders = getAuthHeaders();
   const taxonomyTerms = [];
   let totalSaved = 0;
@@ -52,17 +75,14 @@ async function main() {
     );
 
     taxonomyTerms.push({
-      taxonomy: taxonomy.slug,
+      slug: taxonomy.slug,
       restBase: taxonomy.restBase,
       name: taxonomy.name,
-      hierarchical: taxonomy.hierarchical,
       terms: terms.map((term: any) => {
         return {
           id: term.id,
-          slug: term.slug,
           name: term.name,
-          parent: term.parent ?? 0,
-          count: term.count ?? 0,
+          slug: term.slug,
           link: term.link,
         };
       }),
