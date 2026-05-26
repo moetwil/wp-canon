@@ -26,8 +26,17 @@ const BUILT_IN_STOPWORDS = [
   "your",
 ];
 const BUILT_IN_WEAK_TERMS = ["article", "content", "page", "post"];
+const BUILT_IN_EXCLUDE_FROM_OPPORTUNITIES = [
+  "privacy",
+  "cookie",
+  "cookies",
+  "disclaimer",
+  "terms",
+  "voorwaarden",
+];
 let stopwords = new Set(BUILT_IN_STOPWORDS);
 let weakTerms = new Set(BUILT_IN_WEAK_TERMS);
+let excludeFromOpportunities = new Set(BUILT_IN_EXCLUDE_FROM_OPPORTUNITIES);
 
 function comparableHostname(hostname: string) {
   return hostname.toLowerCase().replace(/^www\./, "");
@@ -84,6 +93,16 @@ function isIgnorableInternalUrl(value: string) {
   );
 }
 
+function isAssetUrl(value: string) {
+  const url = new URL(value);
+  const path = url.pathname.toLowerCase();
+
+  return (
+    path.startsWith("/wp-content/uploads/") ||
+    /\.(jpe?g|png|gif|webp|svg|pdf|zip|docx?)$/.test(path)
+  );
+}
+
 function extractInternalLinks(content: string, siteUrl: string) {
   const links = new Set<string>();
   const hrefPattern = /href=(["'])(.*?)\1/gi;
@@ -114,7 +133,7 @@ function extractInternalLinks(content: string, siteUrl: string) {
     try {
       const url = normalizeInternalUrl(value, siteUrl);
 
-      return url ? [url] : [];
+      return url && !isAssetUrl(url) ? [url] : [];
     } catch {
       return [];
     }
@@ -173,6 +192,7 @@ async function loadSemanticConfig() {
   const config = await readJson("config/semantic.json", {
     stopwords: [],
     weakTerms: [],
+    excludeFromOpportunities: [],
   });
 
   stopwords = new Set([
@@ -182,6 +202,10 @@ async function loadSemanticConfig() {
   weakTerms = new Set([
     ...BUILT_IN_WEAK_TERMS,
     ...normalizeKeywordList(config.weakTerms ?? []),
+  ]);
+  excludeFromOpportunities = new Set([
+    ...BUILT_IN_EXCLUDE_FROM_OPPORTUNITIES,
+    ...normalizeKeywordList(config.excludeFromOpportunities ?? []),
   ]);
 }
 
@@ -320,7 +344,19 @@ function alreadyLinksTo(item: any, target: any) {
   });
 }
 
+function isExcludedFromOpportunities(item: any) {
+  const value = normalizeKeyword(`${item.slug ?? ""} ${item.path ?? ""}`);
+
+  return Array.from(excludeFromOpportunities).some((term) => {
+    return value.includes(term);
+  });
+}
+
 function getLinkOpportunities(item: any, items: any[]) {
+  if (isExcludedFromOpportunities(item)) {
+    return [];
+  }
+
   const itemSlugKeywords = getKeywords(item.slug);
   const itemTitleKeywords = getKeywords(item.title);
   const itemContentKeywords = new Set<string>(item.contentKeywords);
@@ -328,7 +364,12 @@ function getLinkOpportunities(item: any, items: any[]) {
 
   return items
     .flatMap((target) => {
-      if (target.path === item.path || !target.url || alreadyLinksTo(item, target)) {
+      if (
+        target.path === item.path ||
+        !target.url ||
+        isExcludedFromOpportunities(target) ||
+        alreadyLinksTo(item, target)
+      ) {
         return [];
       }
 
