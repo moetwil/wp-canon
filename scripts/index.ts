@@ -7,14 +7,40 @@ dotenv.config({ quiet: true });
 const WP_URL = process.env.WP_URL;
 
 function extractInternalLinks(content: string, siteUrl: string) {
-  const links = content.match(/https?:\/\/[^\s"'<>]+/g) ?? [];
-  const siteHostname = new URL(siteUrl).hostname;
+  const site = new URL(siteUrl);
+  const baseUrl = `${site.origin}/`;
+  const links = new Set<string>();
+  const hrefPattern = /href=(["'])(.*?)\1/gi;
+  const absolutePattern = /https?:\/\/[^\s"'<>]+/g;
 
-  return links.filter((link) => {
+  for (const match of content.matchAll(hrefPattern)) {
+    links.add(match[2]);
+  }
+
+  for (const match of content.matchAll(absolutePattern)) {
+    links.add(match[0]);
+  }
+
+  return Array.from(links).flatMap((link) => {
+    const value = link.trim();
+    const lowerValue = value.toLowerCase();
+
+    if (
+      !value ||
+      value.startsWith("#") ||
+      lowerValue.startsWith("mailto:") ||
+      lowerValue.startsWith("tel:") ||
+      lowerValue.startsWith("javascript:")
+    ) {
+      return [];
+    }
+
     try {
-      return new URL(link).hostname === siteHostname;
+      const url = new URL(value, baseUrl);
+
+      return url.hostname === site.hostname ? [url.href] : [];
     } catch {
-      return false;
+      return [];
     }
   });
 }
