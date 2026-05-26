@@ -9,31 +9,54 @@ const STOPWORDS = new Set([
   "aan",
   "al",
   "als",
+  "altijd",
+  "andere",
+  "about",
+  "all",
+  "and",
+  "betrouwbaar",
   "ben",
   "bij",
+  "because",
+  "conclusie",
+  "dan",
   "dat",
   "de",
   "deze",
   "die",
   "dit",
+  "doen",
   "door",
   "een",
   "en",
   "er",
+  "extra",
+  "externe",
+  "faq",
+  "for",
   "gaan",
   "geen",
+  "goed",
+  "helpt",
   "het",
   "hoe",
   "hun",
   "in",
+  "informatie",
   "is",
   "je",
   "kan",
+  "kunt",
+  "kunnen",
   "kun",
   "maar",
+  "meer",
   "met",
+  "minder",
+  "mensen",
   "niet",
   "naar",
+  "something",
   "of",
   "om",
   "ook",
@@ -41,15 +64,24 @@ const STOPWORDS = new Set([
   "over",
   "te",
   "tot",
+  "the",
+  "then",
+  "this",
   "uit",
   "van",
   "veel",
+  "vaak",
   "voor",
   "waar",
   "wanneer",
+  "waarom",
   "wat",
   "wel",
+  "welke",
+  "worden",
   "wordt",
+  "with",
+  "your",
   "zijn",
 ]);
 
@@ -183,18 +215,10 @@ function getRawTerms(data: any) {
 }
 
 function normalizeKeyword(value: string) {
-  let word = value
+  return value
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
-
-  if (word.length > 6 && word.endsWith("en")) {
-    word = word.slice(0, -2);
-  } else if (word.length > 4 && word.endsWith("s")) {
-    word = word.slice(0, -1);
-  }
-
-  return word;
 }
 
 function getKeywords(value: string) {
@@ -203,7 +227,9 @@ function getKeywords(value: string) {
       .replace(/<[^>]*>/g, "")
       .split(/[^a-zA-Z0-9À-ÿ]+/i)
       .map(normalizeKeyword)
-      .filter((word) => word.length > 2 && !STOPWORDS.has(word))
+      .filter((word) => {
+        return word.length > 2 && !/^\d+$/.test(word) && !STOPWORDS.has(word);
+      })
   );
 }
 
@@ -211,6 +237,10 @@ function extractHeadings(content: string) {
   return Array.from(content.matchAll(/<h[23][^>]*>([\s\S]*?)<\/h[23]>/gi)).map(
     (match) => match[1].replace(/<[^>]*>/g, " ")
   );
+}
+
+function stripHtml(content: string) {
+  return content.replace(/<[^>]*>/g, " ");
 }
 
 function addWeightedKeywords(
@@ -233,6 +263,8 @@ function getContentKeywords(item: any, content: string) {
     addWeightedKeywords(scores, heading, 3);
   }
 
+  addWeightedKeywords(scores, stripHtml(content), 0.5);
+
   for (const term of item.terms) {
     addWeightedKeywords(scores, term.name ?? term.slug, 2);
   }
@@ -250,6 +282,18 @@ function getTermKeys(item: any) {
 }
 
 function getOverlap(first: Set<string>, second: Set<string>) {
+  return Array.from(first).filter((value) => {
+    return Array.from(second).some((other) => {
+      return (
+        value === other ||
+        (value.length > 5 && other.length > 5 && value.includes(other)) ||
+        (value.length > 5 && other.length > 5 && other.includes(value))
+      );
+    });
+  });
+}
+
+function getExactOverlap(first: Set<string>, second: Set<string>) {
   return Array.from(first).filter((value) => second.has(value));
 }
 
@@ -311,6 +355,7 @@ function alreadyLinksTo(item: any, target: any) {
 function getLinkOpportunities(item: any, items: any[]) {
   const itemSlugKeywords = getKeywords(item.slug);
   const itemTitleKeywords = getKeywords(item.title);
+  const itemContentKeywords = new Set<string>(item.contentKeywords);
   const itemTermKeys = getTermKeys(item);
 
   return items
@@ -321,11 +366,26 @@ function getLinkOpportunities(item: any, items: any[]) {
 
       const slugOverlap = getOverlap(itemSlugKeywords, getKeywords(target.slug));
       const titleOverlap = getOverlap(itemTitleKeywords, getKeywords(target.title));
-      const taxonomyOverlap = getOverlap(itemTermKeys, getTermKeys(target));
+      const contentOverlap = getOverlap(
+        itemContentKeywords,
+        new Set<string>(target.contentKeywords)
+      );
+      const taxonomyOverlap = getExactOverlap(itemTermKeys, getTermKeys(target));
+      const keywordOverlap = new Set([
+        ...slugOverlap,
+        ...titleOverlap,
+        ...contentOverlap,
+      ]);
       const score =
-        slugOverlap.length * 3 + titleOverlap.length * 2 + taxonomyOverlap.length;
+        slugOverlap.length * 4 +
+        titleOverlap.length * 3 +
+        taxonomyOverlap.length * 2 +
+        contentOverlap.length;
 
-      if (score === 0) {
+      if (
+        keywordOverlap.size === 0 ||
+        (keywordOverlap.size < 2 && taxonomyOverlap.length === 0)
+      ) {
         return [];
       }
 
@@ -339,6 +399,9 @@ function getLinkOpportunities(item: any, items: any[]) {
       }
       if (taxonomyOverlap.length > 0) {
         reasons.push("shared taxonomy terms");
+      }
+      if (reasons.length === 0 && contentOverlap.length > 1) {
+        reasons.push("shared content keywords");
       }
 
       return [
@@ -362,6 +425,9 @@ function slugifyKeywords(keywords: string[]) {
 
 function getSemanticCluster(item: any, items: any[]) {
   const itemKeywords = new Set<string>(item.contentKeywords);
+  const preferredKeywords = Array.from(
+    new Set([...getKeywords(item.slug), ...getKeywords(item.title)])
+  ).filter((keyword) => itemKeywords.has(keyword));
   const sharedCounts = new Map<string, number>();
 
   for (const target of items) {
@@ -377,14 +443,16 @@ function getSemanticCluster(item: any, items: any[]) {
     }
   }
 
-  const sharedKeywords = item.contentKeywords
+  const sharedKeywords = preferredKeywords
     .filter((keyword: string) => sharedCounts.has(keyword))
     .sort((a: string, b: string) => {
       return (sharedCounts.get(b) ?? 0) - (sharedCounts.get(a) ?? 0);
     });
+  const fallbackKeywords =
+    preferredKeywords.length > 0 ? preferredKeywords : item.contentKeywords;
 
   return slugifyKeywords(
-    sharedKeywords.length > 0 ? sharedKeywords : item.contentKeywords
+    sharedKeywords.length > 0 ? sharedKeywords : fallbackKeywords
   );
 }
 
