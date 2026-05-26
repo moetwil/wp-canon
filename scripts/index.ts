@@ -25,7 +25,50 @@ const BUILT_IN_STOPWORDS = [
   "with",
   "your",
 ];
-const BUILT_IN_WEAK_TERMS = ["article", "content", "page", "post"];
+const BUILT_IN_WEAK_TERMS = [
+  "aanbevolen",
+  "andere",
+  "article",
+  "beginnen",
+  "belangrijk",
+  "belangrijkste",
+  "beter",
+  "duidelijk",
+  "echt",
+  "content",
+  "hebben",
+  "helpen",
+  "helpt",
+  "hoeveel",
+  "hoeveelheid",
+  "houden",
+  "klacht",
+  "klachten",
+  "komen",
+  "komt",
+  "maken",
+  "meest",
+  "meestal",
+  "meer",
+  "mijn",
+  "moet",
+  "opletten",
+  "page",
+  "passen",
+  "patroon",
+  "per",
+  "post",
+  "prettig",
+  "rustig",
+  "stap",
+  "uitleg",
+  "vaak",
+  "video",
+  "voelen",
+  "voelt",
+  "voel",
+  "zijn",
+];
 const BUILT_IN_EXCLUDE_FROM_OPPORTUNITIES = [
   "privacy",
   "cookie",
@@ -300,6 +343,10 @@ function getSpecificKeywords(keywords: Iterable<string>) {
   return Array.from(keywords).filter((keyword) => !weakTerms.has(keyword));
 }
 
+function getSpecificOverlap(first: Set<string>, second: Set<string>) {
+  return getSpecificKeywords(getOverlap(first, second));
+}
+
 function getExactOverlap(first: Set<string>, second: Set<string>) {
   return Array.from(first).filter((value) => second.has(value));
 }
@@ -373,11 +420,13 @@ function getAnchorSuggestions(
   matchingHeadings: string[]
 ) {
   const title = cleanText(target.title);
-  const keywordAnchor = specificKeywords.slice(0, 4).join(" ");
+  const semanticAnchor = target.semanticCluster.replace(/-/g, " ");
+  const keywordAnchor = getAnchorKeywordPhrase(specificKeywords);
   const suggestions = [
+    title.length <= 60 ? title : "",
+    semanticAnchor,
     keywordAnchor,
     ...matchingHeadings.map(cleanText),
-    title.length <= 60 ? title : "",
   ];
   const seen = new Set<string>();
 
@@ -389,6 +438,7 @@ function getAnchorSuggestions(
       if (
         !anchor ||
         anchor.length > 60 ||
+        isWeakAnchor(anchor) ||
         GENERIC_ANCHORS.has(normalized) ||
         seen.has(normalized)
       ) {
@@ -401,14 +451,44 @@ function getAnchorSuggestions(
     .slice(0, 3);
 }
 
+function getAnchorKeywordPhrase(keywords: string[]) {
+  const cleanKeywords = getSpecificKeywords(keywords)
+    .filter((keyword) => keyword.length > 3)
+    .filter((keyword, index, all) => {
+      return !all.some((other, otherIndex) => {
+        return (
+          otherIndex < index &&
+          (other.includes(keyword) || keyword.includes(other))
+        );
+      });
+    });
+
+  return cleanKeywords.slice(0, 3).join(" ");
+}
+
+function isWeakAnchor(anchor: string) {
+  const keywords = Array.from(getKeywords(anchor));
+
+  if (keywords.length === 0) {
+    return true;
+  }
+
+  if (keywords.length === 1) {
+    return weakTerms.has(keywords[0]) || anchor.length < 4;
+  }
+
+  return getSpecificKeywords(keywords).length === 0;
+}
+
 function getRelevanceScore(
   slugOverlap: string[],
   titleOverlap: string[],
   headingOverlap: string[],
   taxonomyOverlap: string[],
-  sameCluster: boolean
+  sameCluster: boolean,
+  specificKeywordCount: number
 ) {
-  return Math.min(
+  const score = Math.min(
     100,
     slugOverlap.length * 25 +
       titleOverlap.length * 20 +
@@ -416,6 +496,16 @@ function getRelevanceScore(
       taxonomyOverlap.length * 15 +
       (sameCluster ? 20 : 0)
   );
+
+  if (score > 80 && specificKeywordCount < 2 && slugOverlap.length === 0 && titleOverlap.length === 0) {
+    return 80;
+  }
+
+  if (specificKeywordCount < 2 && slugOverlap.length === 0 && titleOverlap.length === 0) {
+    return Math.min(score, 60);
+  }
+
+  return score;
 }
 
 function getLinkOpportunities(item: any, items: any[]) {
@@ -439,8 +529,8 @@ function getLinkOpportunities(item: any, items: any[]) {
         return [];
       }
 
-      const slugOverlap = getOverlap(itemSlugKeywords, getKeywords(target.slug));
-      const titleOverlap = getOverlap(itemTitleKeywords, getKeywords(target.title));
+      const slugOverlap = getSpecificOverlap(itemSlugKeywords, getKeywords(target.slug));
+      const titleOverlap = getSpecificOverlap(itemTitleKeywords, getKeywords(target.title));
       const contentOverlap = getOverlap(
         itemContentKeywords,
         new Set<string>(target.contentKeywords)
@@ -472,7 +562,8 @@ function getLinkOpportunities(item: any, items: any[]) {
         specificTitleOverlap,
         matchingHeadings,
         taxonomyOverlap,
-        Boolean(sameCluster)
+        Boolean(sameCluster),
+        specificKeywordOverlap.size
       );
 
       if (
@@ -533,7 +624,7 @@ function getClusterKeywords(keywords: string[]) {
     return [...specific, ...weak];
   }
 
-  return keywords;
+  return [];
 }
 
 function getSemanticCluster(item: any, items: any[]) {
