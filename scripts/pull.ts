@@ -15,6 +15,10 @@ async function fetchJson(url: string, init?: RequestInit) {
   return response.json();
 }
 
+function stripHtml(html: string) {
+  return html.replace(/<[^>]*>/g, "").trim();
+}
+
 async function main() {
   const apiBase = await getApiBase();
   const config = JSON.parse(await readFile("config/content-types.json", "utf8"));
@@ -42,6 +46,11 @@ async function main() {
         status: post.status,
         title: post.title.rendered,
         link: post.link,
+        excerpt: stripHtml(post.excerpt?.rendered ?? ""),
+        date: post.date,
+        modified: post.modified,
+        categories: post.categories ?? [],
+        tags: post.tags ?? [],
       });
 
       await writeFile(`content/${postType.restBase}/${post.slug}.md`, markdown);
