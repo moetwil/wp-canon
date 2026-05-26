@@ -34,6 +34,8 @@ WP_USERNAME=admin
 WP_APP_PASSWORD=your application password
 ```
 
+`npm run index` generates `data/content-index.json` with each item's title, slug, type, status, local file path, and internal links. This gives Claude/Codex a low-token overview of the website.
+
 ## Local WordPress Development
 
 Requirements:
