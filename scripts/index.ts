@@ -7,24 +7,50 @@ dotenv.config({ quiet: true });
 const WP_URL = process.env.WP_URL;
 const STOPWORDS = new Set([
   "aan",
+  "al",
   "als",
+  "ben",
   "bij",
+  "dat",
   "de",
+  "deze",
+  "die",
+  "dit",
   "door",
   "een",
   "en",
+  "er",
+  "gaan",
+  "geen",
   "het",
+  "hoe",
+  "hun",
   "in",
   "is",
   "je",
+  "kan",
+  "kun",
+  "maar",
   "met",
+  "niet",
   "naar",
   "of",
+  "om",
+  "ook",
   "op",
+  "over",
   "te",
+  "tot",
+  "uit",
   "van",
+  "veel",
   "voor",
+  "waar",
+  "wanneer",
   "wat",
+  "wel",
+  "wordt",
+  "zijn",
 ]);
 
 function comparableHostname(hostname: string) {
@@ -156,14 +182,65 @@ function getRawTerms(data: any) {
   };
 }
 
+function normalizeKeyword(value: string) {
+  let word = value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  if (word.length > 6 && word.endsWith("en")) {
+    word = word.slice(0, -2);
+  } else if (word.length > 4 && word.endsWith("s")) {
+    word = word.slice(0, -1);
+  }
+
+  return word;
+}
+
 function getKeywords(value: string) {
   return new Set(
     String(value ?? "")
-      .toLowerCase()
       .replace(/<[^>]*>/g, "")
-      .split(/[^a-z0-9]+/i)
+      .split(/[^a-zA-Z0-9À-ÿ]+/i)
+      .map(normalizeKeyword)
       .filter((word) => word.length > 2 && !STOPWORDS.has(word))
   );
+}
+
+function extractHeadings(content: string) {
+  return Array.from(content.matchAll(/<h[23][^>]*>([\s\S]*?)<\/h[23]>/gi)).map(
+    (match) => match[1].replace(/<[^>]*>/g, " ")
+  );
+}
+
+function addWeightedKeywords(
+  scores: Map<string, number>,
+  value: string,
+  weight: number
+) {
+  for (const keyword of getKeywords(value)) {
+    scores.set(keyword, (scores.get(keyword) ?? 0) + weight);
+  }
+}
+
+function getContentKeywords(item: any, content: string) {
+  const scores = new Map<string, number>();
+
+  addWeightedKeywords(scores, item.title, 4);
+  addWeightedKeywords(scores, item.slug, 4);
+
+  for (const heading of extractHeadings(content)) {
+    addWeightedKeywords(scores, heading, 3);
+  }
+
+  for (const term of item.terms) {
+    addWeightedKeywords(scores, term.name ?? term.slug, 2);
+  }
+
+  return Array.from(scores.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 15)
+    .map(([keyword]) => keyword);
 }
 
 function getTermKeys(item: any) {
@@ -279,6 +356,61 @@ function getLinkOpportunities(item: any, items: any[]) {
     });
 }
 
+function slugifyKeywords(keywords: string[]) {
+  return keywords.slice(0, 2).join("-") || "uncategorized";
+}
+
+function getSemanticCluster(item: any, items: any[]) {
+  const itemKeywords = new Set<string>(item.contentKeywords);
+  const sharedCounts = new Map<string, number>();
+
+  for (const target of items) {
+    if (target.path === item.path) {
+      continue;
+    }
+
+    for (const keyword of getOverlap(
+      itemKeywords,
+      new Set<string>(target.contentKeywords)
+    )) {
+      sharedCounts.set(keyword, (sharedCounts.get(keyword) ?? 0) + 1);
+    }
+  }
+
+  const sharedKeywords = item.contentKeywords
+    .filter((keyword: string) => sharedCounts.has(keyword))
+    .sort((a: string, b: string) => {
+      return (sharedCounts.get(b) ?? 0) - (sharedCounts.get(a) ?? 0);
+    });
+
+  return slugifyKeywords(
+    sharedKeywords.length > 0 ? sharedKeywords : item.contentKeywords
+  );
+}
+
+function getKeywordOverlapCount(item: any, items: any[]) {
+  const itemKeywords = new Set<string>(item.contentKeywords);
+
+  return items.reduce((total, target) => {
+    if (target.path === item.path) {
+      return total;
+    }
+
+    return (
+      total +
+      getOverlap(itemKeywords, new Set<string>(target.contentKeywords)).length
+    );
+  }, 0);
+}
+
+function getHubScore(item: any, items: any[]) {
+  return (
+    item.linkedFrom.length * 3 +
+    item.internalLinks.length +
+    getKeywordOverlapCount(item, items)
+  );
+}
+
 async function main() {
   if (!WP_URL) {
     throw new Error("Missing WP_URL in .env");
@@ -339,7 +471,7 @@ async function main() {
       }
     }
 
-    items.push({
+    const item = {
       title: parsed.data.title,
       slug: parsed.data.slug,
       type: parsed.data.type,
@@ -349,6 +481,11 @@ async function main() {
       url: normalizeInternalUrl(parsed.data.link, WP_URL),
       terms,
       internalLinks: extractInternalLinks(parsed.content, WP_URL),
+    };
+
+    items.push({
+      ...item,
+      contentKeywords: getContentKeywords(item, parsed.content),
     });
   }
 
@@ -369,6 +506,8 @@ async function main() {
       indexedSlugs
     );
     item.linkOpportunities = getLinkOpportunities(item, items);
+    item.semanticCluster = getSemanticCluster(item, items);
+    item.hubScore = getHubScore(item, items);
     item.orphan = item.linkedFrom.length === 0;
     delete item.url;
   }
