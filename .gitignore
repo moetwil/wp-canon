@@ -1,4 +1,19 @@
-node_modules
+# Environment
 .env
+
+# Dependencies
+node_modules
+
+# Build output
 dist
+
+# macOS
 .DS_Store
+
+# Generated site content
+content/*
+!content/.gitkeep
+
+# Generated data
+data/*
+!data/.gitkeep
