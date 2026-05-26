@@ -372,20 +372,23 @@ function getAnchorSuggestions(
   specificKeywords: string[],
   matchingHeadings: string[]
 ) {
+  const title = cleanText(target.title);
+  const keywordAnchor = specificKeywords.slice(0, 4).join(" ");
   const suggestions = [
-    cleanText(target.title),
+    keywordAnchor,
     ...matchingHeadings.map(cleanText),
-    specificKeywords.slice(0, 4).join(" "),
+    title.length <= 60 ? title : "",
   ];
   const seen = new Set<string>();
 
   return suggestions
+    .map((anchor) => anchor.trim().toLowerCase())
     .filter((anchor) => {
       const normalized = normalizeKeyword(anchor);
 
       if (
         !anchor ||
-        anchor.length > 70 ||
+        anchor.length > 60 ||
         GENERIC_ANCHORS.has(normalized) ||
         seen.has(normalized)
       ) {
@@ -398,8 +401,21 @@ function getAnchorSuggestions(
     .slice(0, 3);
 }
 
-function getRelevanceScore(rawScore: number, sameCluster: boolean) {
-  return Math.min(100, Math.round(rawScore * 8 + (sameCluster ? 12 : 0)));
+function getRelevanceScore(
+  slugOverlap: string[],
+  titleOverlap: string[],
+  headingOverlap: string[],
+  taxonomyOverlap: string[],
+  sameCluster: boolean
+) {
+  return Math.min(
+    100,
+    slugOverlap.length * 25 +
+      titleOverlap.length * 20 +
+      headingOverlap.length * 15 +
+      taxonomyOverlap.length * 15 +
+      (sameCluster ? 20 : 0)
+  );
 }
 
 function getLinkOpportunities(item: any, items: any[]) {
@@ -451,16 +467,16 @@ function getLinkOpportunities(item: any, items: any[]) {
         item.semanticCluster &&
         target.semanticCluster &&
         item.semanticCluster === target.semanticCluster;
-      const score =
-        specificSlugOverlap.length * 5 +
-        specificTitleOverlap.length * 4 +
-        taxonomyOverlap.length * 2 +
-        matchingHeadings.length * 3 +
-        specificContentOverlap.length +
-        (keywordOverlap.size - specificKeywordOverlap.size) * 0.25 +
-        (sameCluster ? 1.5 : 0);
+      const relevanceScore = getRelevanceScore(
+        specificSlugOverlap,
+        specificTitleOverlap,
+        matchingHeadings,
+        taxonomyOverlap,
+        Boolean(sameCluster)
+      );
 
       if (
+        relevanceScore < 35 ||
         specificKeywordOverlap.size === 0 ||
         (specificKeywordOverlap.size < 2 && taxonomyOverlap.length === 0)
       ) {
@@ -486,17 +502,16 @@ function getLinkOpportunities(item: any, items: any[]) {
         {
           target: target.url,
           reason: reasons.join(", "),
-          relevanceScore: getRelevanceScore(score, sameCluster),
+          relevanceScore,
           suggestedAnchors: getAnchorSuggestions(
             target,
             Array.from(specificKeywordOverlap),
             matchingHeadings
           ),
-          score,
         },
       ];
     })
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.relevanceScore - a.relevanceScore)
     .slice(0, 5)
     .map(({ target, reason, relevanceScore, suggestedAnchors }) => {
       return { target, reason, relevanceScore, suggestedAnchors };
