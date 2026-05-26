@@ -1,3 +1,4 @@
+import { mkdir, writeFile } from "fs/promises";
 import dotenv from "dotenv";
 
 dotenv.config({ quiet: true });
@@ -66,12 +67,31 @@ async function main() {
   });
   const postTypes = Object.entries(types).filter(([, type]: [string, any]) => {
     return type.viewable === true && type.rest_base;
+  }).map(([slug, type]: [string, any]) => {
+    return {
+      slug,
+      restBase: type.rest_base,
+      name: type.name,
+    };
   });
 
   console.log("Discovered post types:");
-  for (const [slug, type] of postTypes as [string, any][]) {
-    console.log(`- ${slug} → ${type.rest_base} (${type.name})`);
+  for (const postType of postTypes) {
+    console.log(`- ${postType.slug} → ${postType.restBase} (${postType.name})`);
   }
+
+  await mkdir("config", { recursive: true });
+  await writeFile(
+    "config/content-types.json",
+    JSON.stringify(
+      {
+        postTypes,
+      },
+      null,
+      2
+    )
+  );
+  console.log("Saved config/content-types.json");
 }
 
 main().catch((error) => {

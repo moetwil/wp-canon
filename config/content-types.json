@@ -1,0 +1,19 @@
+{
+  "postTypes": [
+    {
+      "slug": "post",
+      "restBase": "posts",
+      "name": "Posts"
+    },
+    {
+      "slug": "page",
+      "restBase": "pages",
+      "name": "Pages"
+    },
+    {
+      "slug": "attachment",
+      "restBase": "media",
+      "name": "Media"
+    }
+  ]
+}
