@@ -24,6 +24,19 @@ function normalizeInternalUrl(value: string, siteUrl: string) {
   return url.href;
 }
 
+function comparableUrl(value: string, siteUrl: string) {
+  const normalized = normalizeInternalUrl(value, siteUrl);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const url = new URL(normalized);
+  url.hash = "";
+
+  return url.href;
+}
+
 function extractInternalLinks(content: string, siteUrl: string) {
   const links = new Set<string>();
   const hrefPattern = /href=(["'])(.*?)\1/gi;
@@ -114,6 +127,24 @@ function getLinkedFrom(item: any, items: any[]) {
     .map((source) => source.path);
 }
 
+function getBrokenInternalLinks(
+  item: any,
+  indexedUrls: Set<string>,
+  indexedSlugs: Set<string>
+) {
+  return item.internalLinks.filter((link: string) => {
+    const url = comparableUrl(link, WP_URL!);
+
+    if (url && indexedUrls.has(url)) {
+      return false;
+    }
+
+    const pathParts = new URL(link).pathname.split("/").filter(Boolean);
+
+    return !pathParts.some((part) => indexedSlugs.has(part));
+  });
+}
+
 async function main() {
   if (!WP_URL) {
     throw new Error("Missing WP_URL in .env");
@@ -187,8 +218,22 @@ async function main() {
     });
   }
 
+  const indexedUrls = new Set(
+    items.flatMap((item) => {
+      const url = item.url ? comparableUrl(item.url, WP_URL) : null;
+
+      return url ? [url] : [];
+    })
+  );
+  const indexedSlugs = new Set(items.map((item) => item.slug).filter(Boolean));
+
   for (const item of items) {
     item.linkedFrom = getLinkedFrom(item, items);
+    item.brokenInternalLinks = getBrokenInternalLinks(
+      item,
+      indexedUrls,
+      indexedSlugs
+    );
     item.orphan = item.linkedFrom.length === 0;
     delete item.url;
   }
