@@ -277,6 +277,16 @@ function stripHtml(content: string) {
 
 function cleanText(value: string) {
   return stripHtml(value)
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) =>
+      String.fromCharCode(parseInt(code, 16))
+    )
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -419,26 +429,31 @@ function getAnchorSuggestions(
   specificKeywords: string[],
   matchingHeadings: string[]
 ) {
-  const title = cleanText(target.title);
-  const semanticAnchor = target.semanticCluster.replace(/-/g, " ");
+  const title = cleanAnchorText(target.title);
+  const slugAnchor = getSlugAnchorPhrase(target.slug);
+  const headingAnchor = matchingHeadings
+    .map(cleanAnchorText)
+    .find((anchor) => isNaturalAnchor(anchor));
+  const semanticAnchor = cleanAnchorText(target.semanticCluster?.replace(/-/g, " "));
   const keywordAnchor = getAnchorKeywordPhrase(specificKeywords);
   const suggestions = [
     title.length <= 60 ? title : "",
-    semanticAnchor,
+    slugAnchor,
+    headingAnchor ?? "",
+    isNaturalAnchor(semanticAnchor) ? semanticAnchor : "",
     keywordAnchor,
-    ...matchingHeadings.map(cleanText),
   ];
   const seen = new Set<string>();
 
   return suggestions
-    .map((anchor) => anchor.trim().toLowerCase())
+    .map(cleanAnchorText)
     .filter((anchor) => {
       const normalized = normalizeKeyword(anchor);
 
       if (
         !anchor ||
         anchor.length > 60 ||
-        isWeakAnchor(anchor) ||
+        !isNaturalAnchor(anchor) ||
         GENERIC_ANCHORS.has(normalized) ||
         seen.has(normalized)
       ) {
@@ -462,8 +477,56 @@ function getAnchorKeywordPhrase(keywords: string[]) {
         );
       });
     });
+  const phrase = cleanKeywords.slice(0, 3).join(" ");
 
-  return cleanKeywords.slice(0, 3).join(" ");
+  return isNaturalAnchor(phrase) ? phrase : "";
+}
+
+function cleanAnchorText(value: string) {
+  return cleanText(String(value ?? ""))
+    .replace(/[_|/\\]+/g, " ")
+    .replace(/\s[-–—:;]\s/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getSlugAnchorPhrase(slug: string) {
+  const phrase = cleanAnchorText(String(slug ?? "").replace(/[-_]+/g, " "));
+
+  return isNaturalAnchor(phrase) ? phrase : "";
+}
+
+function isNaturalAnchor(anchor: string) {
+  const cleanAnchor = cleanAnchorText(anchor);
+  const words = Array.from(getKeywords(cleanAnchor));
+
+  if (isWeakAnchor(cleanAnchor)) {
+    return false;
+  }
+
+  if (words.length >= 3) {
+    return !looksLikeKeywordFragment(cleanAnchor);
+  }
+
+  if (words.length === 2) {
+    return cleanAnchor.length >= 8 && !looksLikeKeywordFragment(cleanAnchor);
+  }
+
+  return cleanAnchor.length >= 4 && /^[A-ZÀ-Ý0-9]/.test(cleanAnchor);
+}
+
+function looksLikeKeywordFragment(anchor: string) {
+  const words = Array.from(getKeywords(anchor));
+
+  if (words.length < 3) {
+    return false;
+  }
+
+  if (!/[A-ZÀ-Ý]/.test(anchor) && !/[&'’]/.test(anchor)) {
+    return true;
+  }
+
+  return words.every((word) => getSpecificKeywords([word]).length > 0);
 }
 
 function isWeakAnchor(anchor: string) {

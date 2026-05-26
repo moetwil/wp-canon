@@ -28,6 +28,7 @@ type ContentIndex = {
 
 type RankedOpportunity = LinkOpportunity & {
   item: IndexItem;
+  targetItem?: IndexItem;
 };
 
 const UTILITY_PATTERNS = [
@@ -76,7 +77,40 @@ const HIGH_VALUE_TYPE_PATTERNS = [
 const MIN_RELEVANCE_SCORE = 60;
 
 function itemTitle(item: IndexItem) {
-  return item.title ?? item.slug ?? item.path ?? "Untitled";
+  return cleanText(item.title ?? item.slug ?? item.path ?? "Untitled");
+}
+
+function cleanText(value: string) {
+  return String(value ?? "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) =>
+      String.fromCharCode(parseInt(code, 16))
+    )
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/[_|/\\]+/g, " ")
+    .replace(/\s[-–—:;]\s/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeKeyword(value: string) {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function getAnchorWords(value: string) {
+  return cleanText(value)
+    .split(/[^a-zA-Z0-9À-ÿ&'’]+/i)
+    .map(normalizeKeyword)
+    .filter((word) => word.length > 2 && !/^\d+$/.test(word));
 }
 
 function itemSearchValue(item: IndexItem) {
@@ -128,6 +162,83 @@ function getContentPriority(item: IndexItem) {
   );
 }
 
+function targetPathParts(target?: string) {
+  if (!target) {
+    return [];
+  }
+
+  try {
+    return new URL(target).pathname.split("/").filter(Boolean);
+  } catch {
+    return target.split("/").filter(Boolean);
+  }
+}
+
+function findTargetItem(target: string | undefined, items: IndexItem[]) {
+  const parts = targetPathParts(target);
+
+  if (parts.length === 0) {
+    return undefined;
+  }
+
+  const lastPart = parts[parts.length - 1];
+
+  return items.find((item) => {
+    return item.slug === lastPart || Boolean(item.slug && parts.includes(item.slug));
+  });
+}
+
+function isNaturalAnchor(anchor: string) {
+  const cleanAnchor = cleanText(anchor);
+  const words = getAnchorWords(cleanAnchor);
+
+  if (!cleanAnchor || cleanAnchor.length > 60 || words.length === 0) {
+    return false;
+  }
+
+  if (words.length >= 3) {
+    return /[A-ZÀ-Ý]/.test(cleanAnchor) || /[&'’]/.test(cleanAnchor);
+  }
+
+  if (words.length === 2) {
+    return cleanAnchor.length >= 8;
+  }
+
+  return cleanAnchor.length >= 4 && /^[A-ZÀ-Ý0-9]/.test(cleanAnchor);
+}
+
+function getSlugAnchor(slug?: string) {
+  const anchor = cleanText(String(slug ?? "").replace(/[-_]+/g, " "));
+
+  return isNaturalAnchor(anchor) ? anchor : "";
+}
+
+function getAnchorSuggestions(
+  opportunity: RankedOpportunity,
+  targetItem?: IndexItem
+) {
+  const candidates = [
+    targetItem?.title,
+    getSlugAnchor(targetItem?.slug),
+    ...(opportunity.suggestedAnchors ?? []),
+  ];
+  const seen = new Set<string>();
+
+  return candidates
+    .map((anchor) => cleanText(anchor ?? ""))
+    .filter((anchor) => {
+      const key = normalizeKeyword(anchor);
+
+      if (!isNaturalAnchor(anchor) || seen.has(key)) {
+        return false;
+      }
+
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 3);
+}
+
 function sortedBrokenItems(items: IndexItem[]) {
   return items
     .filter((item) => (item.brokenInternalLinks?.length ?? 0) > 0)
@@ -157,7 +268,11 @@ function sortedOpportunities(items: IndexItem[]) {
     .filter((item) => !isUtilityItem(item))
     .flatMap((item) => {
       return (item.linkOpportunities ?? []).map((opportunity) => {
-        return { item, ...opportunity };
+        return {
+          item,
+          targetItem: findTargetItem(opportunity.target, items),
+          ...opportunity,
+        };
       });
     })
     .filter((opportunity) => {
@@ -176,8 +291,9 @@ function sortedOpportunities(items: IndexItem[]) {
     .filter((opportunity) => {
       const source = opportunity.item.path ?? "unknown";
       const pair = `${source} -> ${opportunity.target ?? "unknown"}`;
+      const anchors = getAnchorSuggestions(opportunity, opportunity.targetItem);
 
-      if (seenSources.has(source) || seenPairs.has(pair)) {
+      if (anchors.length === 0 || seenSources.has(source) || seenPairs.has(pair)) {
         return false;
       }
 
@@ -293,18 +409,25 @@ function renderOpportunities(items: IndexItem[]) {
     ) +
     tasks
       .map((opportunity, index) => {
+        const targetTitle = opportunity.targetItem
+          ? itemTitle(opportunity.targetItem)
+          : "Unknown target";
+        const anchors = getAnchorSuggestions(opportunity, opportunity.targetItem);
+        const [preferredAnchor, ...alternativeAnchors] = anchors;
+
         return `## ${index + 1}. Link from ${itemTitle(
           opportunity.item
         )} to related content
 
 - Affected file/page: ${opportunity.item.path ?? "unknown"}
+- Target title: ${targetTitle}
+- Target URL: ${opportunity.target ?? "unknown target"}
 - Issue summary: The source page appears contextually related to the target but does not currently link to it.
 - Suggested action: Add one natural internal link from the affected page to the target URL.
-- Related URLs:
-${listItems([opportunity.target ?? "unknown target"])}
-- Suggested anchor text if available:
-${listItems(opportunity.suggestedAnchors ?? [])}
-- Relevant reasoning/relevance score if available: score ${
+- Preferred anchor: ${preferredAnchor ?? "Use the target page title"}
+- Alternative anchors:
+${listItems(alternativeAnchors)}
+- Relevance score and reason: score ${
           opportunity.relevanceScore ?? "unknown"
         }${opportunity.reason ? `, ${opportunity.reason}` : ""}.
 `;

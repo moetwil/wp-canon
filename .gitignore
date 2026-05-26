@@ -17,4 +17,7 @@ content/*
 # Generated data
 data/*
 !data/.gitkeepreports/*.md
+reports/**
 !reports/.gitkeep
+tasks/**
+!tasks/.gitkeep
