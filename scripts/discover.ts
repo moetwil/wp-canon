@@ -31,14 +31,17 @@ async function main() {
 
   let data;
   let usersMeUrl;
+  let typesUrl;
 
   try {
     data = await fetchJson(`${WP_URL}/wp-json`);
     usersMeUrl = `${WP_URL}/wp-json/wp/v2/users/me`;
+    typesUrl = `${WP_URL}/wp-json/wp/v2/types?context=edit`;
   } catch {
     console.log("Pretty REST URL failed, trying fallback...");
     data = await fetchJson(`${WP_URL}/?rest_route=/`);
     usersMeUrl = `${WP_URL}/?rest_route=/wp/v2/users/me`;
+    typesUrl = `${WP_URL}/?rest_route=/wp/v2/types&context=edit`;
   }
 
   const auth = Buffer.from(`${WP_USERNAME}:${WP_APP_PASSWORD}`).toString(
@@ -55,6 +58,20 @@ async function main() {
   console.log("URL:", data.url);
   console.log("Authenticated as:", user.name);
   console.log("User slug:", user.slug);
+
+  const types = await fetchJson(typesUrl, {
+    headers: {
+      Authorization: `Basic ${auth}`,
+    },
+  });
+  const postTypes = Object.entries(types).filter(([, type]: [string, any]) => {
+    return type.viewable === true && type.rest_base;
+  });
+
+  console.log("Discovered post types:");
+  for (const [slug, type] of postTypes as [string, any][]) {
+    console.log(`- ${slug} → ${type.rest_base} (${type.name})`);
+  }
 }
 
 main().catch((error) => {
