@@ -5,6 +5,27 @@ import matter from "gray-matter";
 dotenv.config({ quiet: true });
 
 const WP_URL = process.env.WP_URL;
+const STOPWORDS = new Set([
+  "aan",
+  "als",
+  "bij",
+  "de",
+  "door",
+  "een",
+  "en",
+  "het",
+  "in",
+  "is",
+  "je",
+  "met",
+  "naar",
+  "of",
+  "op",
+  "te",
+  "van",
+  "voor",
+  "wat",
+]);
 
 function comparableHostname(hostname: string) {
   return hostname.toLowerCase().replace(/^www\./, "");
@@ -135,6 +156,26 @@ function getRawTerms(data: any) {
   };
 }
 
+function getKeywords(value: string) {
+  return new Set(
+    String(value ?? "")
+      .toLowerCase()
+      .replace(/<[^>]*>/g, "")
+      .split(/[^a-z0-9]+/i)
+      .filter((word) => word.length > 2 && !STOPWORDS.has(word))
+  );
+}
+
+function getTermKeys(item: any) {
+  return new Set<string>(
+    item.terms.map((term: any) => `${term.taxonomy}:${term.id}`).filter(Boolean)
+  );
+}
+
+function getOverlap(first: Set<string>, second: Set<string>) {
+  return Array.from(first).filter((value) => second.has(value));
+}
+
 function getLinkedFrom(item: any, items: any[]) {
   const targets = [item.url, item.slug].filter(Boolean);
 
@@ -171,6 +212,71 @@ function getBrokenInternalLinks(
 
     return !pathParts.some((part) => indexedSlugs.has(part));
   });
+}
+
+function alreadyLinksTo(item: any, target: any) {
+  if (!target.url) {
+    return false;
+  }
+
+  const targetUrl = comparableUrl(target.url, WP_URL!);
+
+  return item.internalLinks.some((link: string) => {
+    const linkUrl = comparableUrl(link, WP_URL!);
+
+    return (
+      (targetUrl && linkUrl === targetUrl) ||
+      new URL(link).pathname.split("/").filter(Boolean).includes(target.slug)
+    );
+  });
+}
+
+function getLinkOpportunities(item: any, items: any[]) {
+  const itemSlugKeywords = getKeywords(item.slug);
+  const itemTitleKeywords = getKeywords(item.title);
+  const itemTermKeys = getTermKeys(item);
+
+  return items
+    .flatMap((target) => {
+      if (target.path === item.path || !target.url || alreadyLinksTo(item, target)) {
+        return [];
+      }
+
+      const slugOverlap = getOverlap(itemSlugKeywords, getKeywords(target.slug));
+      const titleOverlap = getOverlap(itemTitleKeywords, getKeywords(target.title));
+      const taxonomyOverlap = getOverlap(itemTermKeys, getTermKeys(target));
+      const score =
+        slugOverlap.length * 3 + titleOverlap.length * 2 + taxonomyOverlap.length;
+
+      if (score === 0) {
+        return [];
+      }
+
+      const reasons = [];
+
+      if (slugOverlap.length > 0) {
+        reasons.push("shared slug keywords");
+      }
+      if (titleOverlap.length > 0) {
+        reasons.push("shared title keywords");
+      }
+      if (taxonomyOverlap.length > 0) {
+        reasons.push("shared taxonomy terms");
+      }
+
+      return [
+        {
+          target: target.url,
+          reason: reasons.join(", "),
+          score,
+        },
+      ];
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5)
+    .map(({ target, reason }) => {
+      return { target, reason };
+    });
 }
 
 async function main() {
@@ -262,6 +368,7 @@ async function main() {
       indexedUrls,
       indexedSlugs
     );
+    item.linkOpportunities = getLinkOpportunities(item, items);
     item.orphan = item.linkedFrom.length === 0;
     delete item.url;
   }
