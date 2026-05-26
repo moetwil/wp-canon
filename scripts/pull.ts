@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import matter from "gray-matter";
+import { cleanContent } from "./lib/cleanContent";
 import { getApiBase, getAuthHeaders } from "./lib/wp";
 
 async function fetchJson(url: string, init?: RequestInit) {
@@ -33,7 +34,7 @@ async function main() {
     await mkdir(`content/${postType.restBase}`, { recursive: true });
 
     for (const post of posts) {
-      const markdown = matter.stringify(post.content.rendered, {
+      const markdown = matter.stringify(cleanContent(post.content.rendered), {
         id: post.id,
         type: postType.slug,
         restBase: postType.restBase,
