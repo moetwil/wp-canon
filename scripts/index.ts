@@ -56,10 +56,11 @@ function getRawTerms(data: any) {
   };
 }
 
-function hasInboundLink(item: any, items: any[]) {
+function getLinkedFrom(item: any, items: any[]) {
   const targets = [item.url, item.slug].filter(Boolean);
 
-  return items.some((source) => {
+  return items
+    .filter((source) => {
     if (source.path === item.path) {
       return false;
     }
@@ -67,7 +68,8 @@ function hasInboundLink(item: any, items: any[]) {
     return source.internalLinks.some((link: string) => {
       return targets.some((target) => link.includes(target));
     });
-  });
+    })
+    .map((source) => source.path);
 }
 
 async function main() {
@@ -144,7 +146,8 @@ async function main() {
   }
 
   for (const item of items) {
-    item.orphan = !hasInboundLink(item, items);
+    item.linkedFrom = getLinkedFrom(item, items);
+    item.orphan = item.linkedFrom.length === 0;
     delete item.url;
   }
 
