@@ -92,6 +92,12 @@ async function main() {
     )
   );
   console.log("Saved config/content-types.json");
+
+  await mkdir("content", { recursive: true });
+  for (const postType of postTypes) {
+    await mkdir(`content/${postType.restBase}`, { recursive: true });
+  }
+  console.log("Scaffolded content folders");
 }
 
 main().catch((error) => {
