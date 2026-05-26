@@ -37,6 +37,30 @@ function comparableUrl(value: string, siteUrl: string) {
   return url.href;
 }
 
+function isIgnorableInternalUrl(value: string) {
+  const url = new URL(value);
+  const path = url.pathname.toLowerCase();
+
+  if (
+    path.startsWith("/wp-admin/") ||
+    path === "/wp-login.php" ||
+    path.startsWith("/wp-json/") ||
+    path.startsWith("/wp-content/") ||
+    path.startsWith("/wp-includes/") ||
+    path.endsWith("/feed/") ||
+    path === "/feed/"
+  ) {
+    return true;
+  }
+
+  return (
+    url.searchParams.has("preview") ||
+    url.searchParams.has("p") ||
+    url.searchParams.has("page_id") ||
+    url.searchParams.has("attachment_id")
+  );
+}
+
 function extractInternalLinks(content: string, siteUrl: string) {
   const links = new Set<string>();
   const hrefPattern = /href=(["'])(.*?)\1/gi;
@@ -133,6 +157,10 @@ function getBrokenInternalLinks(
   indexedSlugs: Set<string>
 ) {
   return item.internalLinks.filter((link: string) => {
+    if (isIgnorableInternalUrl(link)) {
+      return false;
+    }
+
     const url = comparableUrl(link, WP_URL!);
 
     if (url && indexedUrls.has(url)) {
