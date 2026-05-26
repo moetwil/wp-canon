@@ -5,85 +5,29 @@ import matter from "gray-matter";
 dotenv.config({ quiet: true });
 
 const WP_URL = process.env.WP_URL;
-const STOPWORDS = new Set([
-  "aan",
-  "al",
-  "als",
-  "altijd",
-  "andere",
+const BUILT_IN_STOPWORDS = [
+  "a",
   "about",
   "all",
+  "an",
   "and",
-  "betrouwbaar",
-  "ben",
-  "bij",
   "because",
-  "conclusie",
-  "dan",
-  "dat",
-  "de",
-  "deze",
-  "die",
-  "dit",
-  "doen",
-  "door",
-  "een",
-  "en",
-  "er",
-  "extra",
-  "externe",
-  "faq",
   "for",
-  "gaan",
-  "geen",
-  "goed",
-  "helpt",
-  "het",
-  "hoe",
-  "hun",
+  "from",
   "in",
-  "informatie",
-  "is",
-  "je",
-  "kan",
-  "kunt",
-  "kunnen",
-  "kun",
-  "maar",
-  "meer",
-  "met",
-  "minder",
-  "mensen",
-  "niet",
-  "naar",
-  "something",
   "of",
-  "om",
-  "ook",
-  "op",
-  "over",
-  "te",
-  "tot",
+  "on",
+  "or",
   "the",
   "then",
   "this",
-  "uit",
-  "van",
-  "veel",
-  "vaak",
-  "voor",
-  "waar",
-  "wanneer",
-  "waarom",
-  "wat",
-  "wel",
-  "welke",
-  "worden",
-  "wordt",
+  "to",
   "with",
   "your",
-  "zijn",
-]);
+];
+const BUILT_IN_WEAK_TERMS = ["article", "content", "page", "post"];
+let stopwords = new Set(BUILT_IN_STOPWORDS);
+let weakTerms = new Set(BUILT_IN_WEAK_TERMS);
 
 function comparableHostname(hostname: string) {
   return hostname.toLowerCase().replace(/^www\./, "");
@@ -221,6 +165,26 @@ function normalizeKeyword(value: string) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
+function normalizeKeywordList(values: string[]) {
+  return values.map(normalizeKeyword).filter(Boolean);
+}
+
+async function loadSemanticConfig() {
+  const config = await readJson("config/semantic.json", {
+    stopwords: [],
+    weakTerms: [],
+  });
+
+  stopwords = new Set([
+    ...BUILT_IN_STOPWORDS,
+    ...normalizeKeywordList(config.stopwords ?? []),
+  ]);
+  weakTerms = new Set([
+    ...BUILT_IN_WEAK_TERMS,
+    ...normalizeKeywordList(config.weakTerms ?? []),
+  ]);
+}
+
 function getKeywords(value: string) {
   return new Set(
     String(value ?? "")
@@ -228,7 +192,7 @@ function getKeywords(value: string) {
       .split(/[^a-zA-Z0-9À-ÿ]+/i)
       .map(normalizeKeyword)
       .filter((word) => {
-        return word.length > 2 && !/^\d+$/.test(word) && !STOPWORDS.has(word);
+        return word.length > 2 && !/^\d+$/.test(word) && !stopwords.has(word);
       })
   );
 }
@@ -291,6 +255,10 @@ function getOverlap(first: Set<string>, second: Set<string>) {
       );
     });
   });
+}
+
+function getSpecificKeywords(keywords: Iterable<string>) {
+  return Array.from(keywords).filter((keyword) => !weakTerms.has(keyword));
 }
 
 function getExactOverlap(first: Set<string>, second: Set<string>) {
@@ -376,31 +344,40 @@ function getLinkOpportunities(item: any, items: any[]) {
         ...titleOverlap,
         ...contentOverlap,
       ]);
+      const specificSlugOverlap = getSpecificKeywords(slugOverlap);
+      const specificTitleOverlap = getSpecificKeywords(titleOverlap);
+      const specificContentOverlap = getSpecificKeywords(contentOverlap);
+      const specificKeywordOverlap = new Set([
+        ...specificSlugOverlap,
+        ...specificTitleOverlap,
+        ...specificContentOverlap,
+      ]);
       const score =
-        slugOverlap.length * 4 +
-        titleOverlap.length * 3 +
+        specificSlugOverlap.length * 5 +
+        specificTitleOverlap.length * 4 +
         taxonomyOverlap.length * 2 +
-        contentOverlap.length;
+        specificContentOverlap.length +
+        (keywordOverlap.size - specificKeywordOverlap.size) * 0.25;
 
       if (
-        keywordOverlap.size === 0 ||
-        (keywordOverlap.size < 2 && taxonomyOverlap.length === 0)
+        specificKeywordOverlap.size === 0 ||
+        (specificKeywordOverlap.size < 2 && taxonomyOverlap.length === 0)
       ) {
         return [];
       }
 
       const reasons = [];
 
-      if (slugOverlap.length > 0) {
+      if (specificSlugOverlap.length > 0) {
         reasons.push("shared slug keywords");
       }
-      if (titleOverlap.length > 0) {
+      if (specificTitleOverlap.length > 0) {
         reasons.push("shared title keywords");
       }
       if (taxonomyOverlap.length > 0) {
         reasons.push("shared taxonomy terms");
       }
-      if (reasons.length === 0 && contentOverlap.length > 1) {
+      if (reasons.length === 0 && specificContentOverlap.length > 1) {
         reasons.push("shared content keywords");
       }
 
@@ -421,6 +398,20 @@ function getLinkOpportunities(item: any, items: any[]) {
 
 function slugifyKeywords(keywords: string[]) {
   return keywords.slice(0, 2).join("-") || "uncategorized";
+}
+
+function getClusterKeywords(keywords: string[]) {
+  const specific = getSpecificKeywords(keywords);
+  const weak = keywords.filter((keyword) => weakTerms.has(keyword));
+
+  if (specific.length >= 2) {
+    return specific;
+  }
+  if (specific.length === 1) {
+    return [...specific, ...weak];
+  }
+
+  return keywords;
 }
 
 function getSemanticCluster(item: any, items: any[]) {
@@ -452,12 +443,12 @@ function getSemanticCluster(item: any, items: any[]) {
     preferredKeywords.length > 0 ? preferredKeywords : item.contentKeywords;
 
   return slugifyKeywords(
-    sharedKeywords.length > 0 ? sharedKeywords : fallbackKeywords
+    getClusterKeywords(sharedKeywords.length > 0 ? sharedKeywords : fallbackKeywords)
   );
 }
 
 function getKeywordOverlapCount(item: any, items: any[]) {
-  const itemKeywords = new Set<string>(item.contentKeywords);
+  const itemKeywords = new Set<string>(getSpecificKeywords(item.contentKeywords));
 
   return items.reduce((total, target) => {
     if (target.path === item.path) {
@@ -466,7 +457,10 @@ function getKeywordOverlapCount(item: any, items: any[]) {
 
     return (
       total +
-      getOverlap(itemKeywords, new Set<string>(target.contentKeywords)).length
+      getOverlap(
+        itemKeywords,
+        new Set<string>(getSpecificKeywords(target.contentKeywords))
+      ).length
     );
   }, 0);
 }
@@ -483,6 +477,8 @@ async function main() {
   if (!WP_URL) {
     throw new Error("Missing WP_URL in .env");
   }
+
+  await loadSemanticConfig();
 
   const files = await findMarkdownFiles("content");
   const taxonomyData = await readJson("data/taxonomy-terms.json", {
