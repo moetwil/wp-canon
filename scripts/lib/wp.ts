@@ -46,3 +46,65 @@ export function getAuthHeaders() {
     Authorization: `Basic ${auth}`,
   };
 }
+
+type PaginatedResult<T> = {
+  items: T[];
+  total?: number;
+  totalPages?: number;
+};
+
+function appendPageParams(
+  url: string,
+  querySeparator: string,
+  page: number,
+  perPage: number
+) {
+  return `${url}${querySeparator}per_page=${perPage}&page=${page}`;
+}
+
+export async function fetchAllPages<T>(
+  url: string,
+  querySeparator: string,
+  init?: RequestInit,
+  perPage = 100
+): Promise<PaginatedResult<T>> {
+  const items: T[] = [];
+  let page = 1;
+  let total: number | undefined;
+  let totalPages: number | undefined;
+
+  while (true) {
+    const pageUrl = appendPageParams(url, querySeparator, page, perPage);
+    const response = await fetch(pageUrl, init);
+
+    if (!response.ok) {
+      throw new Error(
+        `Request failed: ${response.status} ${response.statusText} (${pageUrl})`
+      );
+    }
+
+    const pageItems = (await response.json()) as T[];
+    const totalHeader = response.headers.get("x-wp-total");
+    const totalPagesHeader = response.headers.get("x-wp-totalpages");
+
+    if (totalHeader) {
+      total = Number(totalHeader);
+    }
+    if (totalPagesHeader) {
+      totalPages = Number(totalPagesHeader);
+    }
+
+    items.push(...pageItems);
+
+    if (totalPages && page >= totalPages) {
+      break;
+    }
+    if (!totalPages && pageItems.length < perPage) {
+      break;
+    }
+
+    page += 1;
+  }
+
+  return { items, total, totalPages };
+}

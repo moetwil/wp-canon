@@ -1,19 +1,7 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import matter from "gray-matter";
 import { cleanContent } from "./lib/cleanContent";
-import { getApiBase, getAuthHeaders } from "./lib/wp";
-
-async function fetchJson(url: string, init?: RequestInit) {
-  const response = await fetch(url, init);
-
-  if (!response.ok) {
-    throw new Error(
-      `Request failed: ${response.status} ${response.statusText} (${url})`
-    );
-  }
-
-  return response.json();
-}
+import { fetchAllPages, getApiBase, getAuthHeaders } from "./lib/wp";
 
 function stripHtml(html: string) {
   return html.replace(/<[^>]*>/g, "").trim();
@@ -67,12 +55,14 @@ async function main() {
 
   await mkdir("data", { recursive: true });
   for (const taxonomy of taxonomies) {
-    const terms = await fetchJson(
-      `${apiBase.wpV2}/${taxonomy.restBase}${apiBase.query}per_page=100`,
+    const result = await fetchAllPages<any>(
+      `${apiBase.wpV2}/${taxonomy.restBase}`,
+      apiBase.query,
       {
         headers: authHeaders,
       }
     );
+    const terms = result.items;
 
     taxonomyTerms.push({
       slug: taxonomy.slug,
@@ -87,6 +77,11 @@ async function main() {
         };
       }),
     });
+
+    console.log(
+      `Pulled ${terms.length} ${taxonomy.restBase} terms` +
+        (result.total !== undefined ? ` (${result.total} reported)` : "")
+    );
   }
 
   await writeFile(
@@ -104,12 +99,14 @@ async function main() {
     const postTypeTaxonomies = taxonomies.filter((taxonomy: any) => {
       return taxonomy.types?.includes(postType.slug);
     });
-    const posts = await fetchJson(
-      `${apiBase.wpV2}/${postType.restBase}${apiBase.query}per_page=100`,
+    const result = await fetchAllPages<any>(
+      `${apiBase.wpV2}/${postType.restBase}`,
+      apiBase.query,
       {
         headers: authHeaders,
       }
     );
+    const posts = result.items;
 
     await mkdir(`content/${postType.restBase}`, { recursive: true });
 
@@ -134,6 +131,10 @@ async function main() {
     }
 
     totalSaved += posts.length;
+    console.log(
+      `Pulled ${posts.length} ${postType.restBase} items` +
+        (result.total !== undefined ? ` (${result.total} reported)` : "")
+    );
   }
 
   console.log(`Saved ${totalSaved} items`);
