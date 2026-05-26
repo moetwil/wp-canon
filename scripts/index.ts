@@ -6,9 +6,25 @@ dotenv.config({ quiet: true });
 
 const WP_URL = process.env.WP_URL;
 
-function extractInternalLinks(content: string, siteUrl: string) {
+function comparableHostname(hostname: string) {
+  return hostname.toLowerCase().replace(/^www\./, "");
+}
+
+function normalizeInternalUrl(value: string, siteUrl: string) {
   const site = new URL(siteUrl);
-  const baseUrl = `${site.origin}/`;
+  const url = new URL(value, `${site.origin}/`);
+
+  if (comparableHostname(url.hostname) !== comparableHostname(site.hostname)) {
+    return null;
+  }
+
+  url.protocol = site.protocol;
+  url.host = site.host;
+
+  return url.href;
+}
+
+function extractInternalLinks(content: string, siteUrl: string) {
   const links = new Set<string>();
   const hrefPattern = /href=(["'])(.*?)\1/gi;
   const absolutePattern = /https?:\/\/[^\s"'<>]+/g;
@@ -36,9 +52,9 @@ function extractInternalLinks(content: string, siteUrl: string) {
     }
 
     try {
-      const url = new URL(value, baseUrl);
+      const url = normalizeInternalUrl(value, siteUrl);
 
-      return url.hostname === site.hostname ? [url.href] : [];
+      return url ? [url] : [];
     } catch {
       return [];
     }
@@ -165,7 +181,7 @@ async function main() {
       restBase: parsed.data.restBase,
       status: parsed.data.status,
       path,
-      url: parsed.data.link,
+      url: normalizeInternalUrl(parsed.data.link, WP_URL),
       terms,
       internalLinks: extractInternalLinks(parsed.content, WP_URL),
     });
