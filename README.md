@@ -1,9 +1,43 @@
-# wp-canon
-Clone your WordPress site into an AI-ready content repo.
+# WP Canon
 
-## Local WordPress development
+Turn a WordPress site into an AI-ready content repo.
+
+## What It Does
+
+- Connects to the WordPress REST API
+- Discovers post types
+- Scaffolds content folders
+- Pulls posts into markdown
+- Generates a content index
+
+## Why This Exists
+
+- Cleaner context for Claude/Codex
+- Fewer tokens than scraping websites
+- Structured content as source material
+
+## Quick Start
+
+```sh
+npm install
+cp .env.example .env
+npm run discover
+npm run pull
+npm run index
+```
+
+Edit `.env` before running the scripts:
+
+```env
+WP_URL=http://localhost:8080
+WP_USERNAME=admin
+WP_APP_PASSWORD=your application password
+```
+
+## Local WordPress Development
 
 Requirements:
+
 - Docker installed
 
 Start local WordPress:
@@ -32,20 +66,17 @@ Create an Application Password:
 Users -> Profile -> Application Passwords
 ```
 
-Create a local `.env` in the project root from `.env.example`:
-
-```env
-WP_URL=http://localhost:8080
-WP_USERNAME=admin
-WP_APP_PASSWORD=your application password
-```
-
-Run:
-
-```sh
-npx tsx scripts/discover.ts
-```
-
-Do not commit `.env`.
-
 The Docker WordPress setup includes a local development mu-plugin that enables Application Passwords over HTTP. This Docker setup is for local development only.
+
+## Safety
+
+Do not commit `.env`, content output, or data output.
+
+## Roadmap
+
+- Custom post type pulling
+- Better markdown cleanup
+- Internal link index
+- Draft push back to WordPress
+- WooCommerce module
+- SEO plugin metadata support
