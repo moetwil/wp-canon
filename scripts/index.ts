@@ -34,6 +34,7 @@ const BUILT_IN_EXCLUDE_FROM_OPPORTUNITIES = [
   "terms",
   "voorwaarden",
 ];
+const GENERIC_ANCHORS = new Set(["klik hier", "lees meer", "hier"]);
 let stopwords = new Set(BUILT_IN_STOPWORDS);
 let weakTerms = new Set(BUILT_IN_WEAK_TERMS);
 let excludeFromOpportunities = new Set(BUILT_IN_EXCLUDE_FROM_OPPORTUNITIES);
@@ -231,6 +232,12 @@ function stripHtml(content: string) {
   return content.replace(/<[^>]*>/g, " ");
 }
 
+function cleanText(value: string) {
+  return stripHtml(value)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function addWeightedKeywords(
   scores: Map<string, number>,
   value: string,
@@ -261,6 +268,14 @@ function getContentKeywords(item: any, content: string) {
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, 15)
     .map(([keyword]) => keyword);
+}
+
+function getHeadingKeywordOverlap(target: any, keywords: string[]) {
+  return target.headings.filter((heading: string) => {
+    const headingKeywords = getKeywords(heading);
+
+    return keywords.some((keyword) => headingKeywords.has(keyword));
+  });
 }
 
 function getTermKeys(item: any) {
@@ -352,6 +367,41 @@ function isExcludedFromOpportunities(item: any) {
   });
 }
 
+function getAnchorSuggestions(
+  target: any,
+  specificKeywords: string[],
+  matchingHeadings: string[]
+) {
+  const suggestions = [
+    cleanText(target.title),
+    ...matchingHeadings.map(cleanText),
+    specificKeywords.slice(0, 4).join(" "),
+  ];
+  const seen = new Set<string>();
+
+  return suggestions
+    .filter((anchor) => {
+      const normalized = normalizeKeyword(anchor);
+
+      if (
+        !anchor ||
+        anchor.length > 70 ||
+        GENERIC_ANCHORS.has(normalized) ||
+        seen.has(normalized)
+      ) {
+        return false;
+      }
+
+      seen.add(normalized);
+      return true;
+    })
+    .slice(0, 3);
+}
+
+function getRelevanceScore(rawScore: number, sameCluster: boolean) {
+  return Math.min(100, Math.round(rawScore * 8 + (sameCluster ? 12 : 0)));
+}
+
 function getLinkOpportunities(item: any, items: any[]) {
   if (isExcludedFromOpportunities(item)) {
     return [];
@@ -393,12 +443,22 @@ function getLinkOpportunities(item: any, items: any[]) {
         ...specificTitleOverlap,
         ...specificContentOverlap,
       ]);
+      const matchingHeadings = getHeadingKeywordOverlap(
+        target,
+        Array.from(specificKeywordOverlap)
+      );
+      const sameCluster =
+        item.semanticCluster &&
+        target.semanticCluster &&
+        item.semanticCluster === target.semanticCluster;
       const score =
         specificSlugOverlap.length * 5 +
         specificTitleOverlap.length * 4 +
         taxonomyOverlap.length * 2 +
+        matchingHeadings.length * 3 +
         specificContentOverlap.length +
-        (keywordOverlap.size - specificKeywordOverlap.size) * 0.25;
+        (keywordOverlap.size - specificKeywordOverlap.size) * 0.25 +
+        (sameCluster ? 1.5 : 0);
 
       if (
         specificKeywordOverlap.size === 0 ||
@@ -426,14 +486,20 @@ function getLinkOpportunities(item: any, items: any[]) {
         {
           target: target.url,
           reason: reasons.join(", "),
+          relevanceScore: getRelevanceScore(score, sameCluster),
+          suggestedAnchors: getAnchorSuggestions(
+            target,
+            Array.from(specificKeywordOverlap),
+            matchingHeadings
+          ),
           score,
         },
       ];
     })
     .sort((a, b) => b.score - a.score)
     .slice(0, 5)
-    .map(({ target, reason }) => {
-      return { target, reason };
+    .map(({ target, reason, relevanceScore, suggestedAnchors }) => {
+      return { target, reason, relevanceScore, suggestedAnchors };
     });
 }
 
@@ -585,6 +651,7 @@ async function main() {
       path,
       url: normalizeInternalUrl(parsed.data.link, WP_URL),
       terms,
+      headings: extractHeadings(parsed.content).map(cleanText),
       internalLinks: extractInternalLinks(parsed.content, WP_URL),
     };
 
@@ -604,6 +671,10 @@ async function main() {
   const indexedSlugs = new Set(items.map((item) => item.slug).filter(Boolean));
 
   for (const item of items) {
+    item.semanticCluster = getSemanticCluster(item, items);
+  }
+
+  for (const item of items) {
     item.linkedFrom = getLinkedFrom(item, items);
     item.brokenInternalLinks = getBrokenInternalLinks(
       item,
@@ -611,10 +682,10 @@ async function main() {
       indexedSlugs
     );
     item.linkOpportunities = getLinkOpportunities(item, items);
-    item.semanticCluster = getSemanticCluster(item, items);
     item.hubScore = getHubScore(item, items);
     item.orphan = item.linkedFrom.length === 0;
     delete item.url;
+    delete item.headings;
   }
 
   await mkdir("data", { recursive: true });
