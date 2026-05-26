@@ -56,6 +56,20 @@ function getRawTerms(data: any) {
   };
 }
 
+function hasInboundLink(item: any, items: any[]) {
+  const targets = [item.url, item.slug].filter(Boolean);
+
+  return items.some((source) => {
+    if (source.path === item.path) {
+      return false;
+    }
+
+    return source.internalLinks.some((link: string) => {
+      return targets.some((target) => link.includes(target));
+    });
+  });
+}
+
 async function main() {
   if (!WP_URL) {
     throw new Error("Missing WP_URL in .env");
@@ -67,7 +81,7 @@ async function main() {
   });
   const termsByKey = new Map<string, any>();
   const termItems = new Map<string, any>();
-  const items = [];
+  const items: any[] = [];
 
   for (const taxonomy of taxonomyData.taxonomies) {
     const taxonomySlug = taxonomy.slug ?? taxonomy.taxonomy;
@@ -123,9 +137,15 @@ async function main() {
       restBase: parsed.data.restBase,
       status: parsed.data.status,
       path,
+      url: parsed.data.link,
       terms,
       internalLinks: extractInternalLinks(parsed.content, WP_URL),
     });
+  }
+
+  for (const item of items) {
+    item.orphan = !hasInboundLink(item, items);
+    delete item.url;
   }
 
   await mkdir("data", { recursive: true });
