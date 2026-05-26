@@ -17,36 +17,39 @@ async function fetchJson(url: string, init?: RequestInit) {
 async function main() {
   const apiBase = await getApiBase();
   const config = JSON.parse(await readFile("config/content-types.json", "utf8"));
-  const postType = config.postTypes.find((type: any) => type.slug === "post");
+  const postTypes = config.postTypes.filter((type: any) => {
+    return type.restBase !== "media";
+  });
+  let totalSaved = 0;
 
-  if (!postType) {
-    throw new Error('Missing post type "post" in config/content-types.json');
-  }
+  for (const postType of postTypes) {
+    const posts = await fetchJson(
+      `${apiBase.wpV2}/${postType.restBase}${apiBase.query}per_page=100`,
+      {
+        headers: getAuthHeaders(),
+      }
+    );
 
-  const posts = await fetchJson(
-    `${apiBase.wpV2}/posts${apiBase.query}per_page=100`,
-    {
-      headers: getAuthHeaders(),
+    await mkdir(`content/${postType.restBase}`, { recursive: true });
+
+    for (const post of posts) {
+      const markdown = matter.stringify(post.content.rendered, {
+        id: post.id,
+        type: postType.slug,
+        restBase: postType.restBase,
+        slug: post.slug,
+        status: post.status,
+        title: post.title.rendered,
+        link: post.link,
+      });
+
+      await writeFile(`content/${postType.restBase}/${post.slug}.md`, markdown);
     }
-  );
 
-  await mkdir(`content/${postType.restBase}`, { recursive: true });
-
-  for (const post of posts) {
-    const markdown = matter.stringify(post.content.rendered, {
-      id: post.id,
-      type: postType.slug,
-      restBase: postType.restBase,
-      slug: post.slug,
-      status: post.status,
-      title: post.title.rendered,
-      link: post.link,
-    });
-
-    await writeFile(`content/${postType.restBase}/${post.slug}.md`, markdown);
+    totalSaved += posts.length;
   }
 
-  console.log(`Saved ${posts.length} posts`);
+  console.log(`Saved ${totalSaved} items`);
 }
 
 main().catch((error) => {
