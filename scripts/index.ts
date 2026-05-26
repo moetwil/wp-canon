@@ -1,5 +1,23 @@
 import { mkdir, readdir, readFile, writeFile } from "fs/promises";
+import dotenv from "dotenv";
 import matter from "gray-matter";
+
+dotenv.config({ quiet: true });
+
+const WP_URL = process.env.WP_URL;
+
+function extractInternalLinks(content: string, siteUrl: string) {
+  const links = content.match(/https?:\/\/[^\s"'<>]+/g) ?? [];
+  const siteHostname = new URL(siteUrl).hostname;
+
+  return links.filter((link) => {
+    try {
+      return new URL(link).hostname === siteHostname;
+    } catch {
+      return false;
+    }
+  });
+}
 
 async function findMarkdownFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -19,6 +37,10 @@ async function findMarkdownFiles(dir: string): Promise<string[]> {
 }
 
 async function main() {
+  if (!WP_URL) {
+    throw new Error("Missing WP_URL in .env");
+  }
+
   const files = await findMarkdownFiles("content");
   const items = [];
 
@@ -33,6 +55,7 @@ async function main() {
       restBase: parsed.data.restBase,
       status: parsed.data.status,
       path,
+      internalLinks: extractInternalLinks(parsed.content, WP_URL),
     });
   }
 
