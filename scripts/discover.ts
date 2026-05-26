@@ -1,11 +1,5 @@
 import { mkdir, writeFile } from "fs/promises";
-import dotenv from "dotenv";
-
-dotenv.config({ quiet: true });
-
-const WP_URL = process.env.WP_URL?.replace(/\/$/, "");
-const WP_USERNAME = process.env.WP_USERNAME;
-const WP_APP_PASSWORD = process.env.WP_APP_PASSWORD;
+import { getApiBase, getAuthHeaders } from "./lib/wp";
 
 async function fetchJson(url: string, init?: RequestInit) {
   const response = await fetch(url, init);
@@ -20,38 +14,11 @@ async function fetchJson(url: string, init?: RequestInit) {
 }
 
 async function main() {
-  if (!WP_URL) {
-    throw new Error("Missing WP_URL in .env");
-  }
-  if (!WP_USERNAME) {
-    throw new Error("Missing WP_USERNAME in .env");
-  }
-  if (!WP_APP_PASSWORD) {
-    throw new Error("Missing WP_APP_PASSWORD in .env");
-  }
-
-  let data;
-  let usersMeUrl;
-  let typesUrl;
-
-  try {
-    data = await fetchJson(`${WP_URL}/wp-json`);
-    usersMeUrl = `${WP_URL}/wp-json/wp/v2/users/me`;
-    typesUrl = `${WP_URL}/wp-json/wp/v2/types?context=edit`;
-  } catch {
-    console.log("Pretty REST URL failed, trying fallback...");
-    data = await fetchJson(`${WP_URL}/?rest_route=/`);
-    usersMeUrl = `${WP_URL}/?rest_route=/wp/v2/users/me`;
-    typesUrl = `${WP_URL}/?rest_route=/wp/v2/types&context=edit`;
-  }
-
-  const auth = Buffer.from(`${WP_USERNAME}:${WP_APP_PASSWORD}`).toString(
-    "base64"
-  );
-  const user = await fetchJson(usersMeUrl, {
-    headers: {
-      Authorization: `Basic ${auth}`,
-    },
+  const apiBase = await getApiBase();
+  const data = await fetchJson(apiBase.root);
+  const authHeaders = getAuthHeaders();
+  const user = await fetchJson(`${apiBase.wpV2}/users/me`, {
+    headers: authHeaders,
   });
 
   console.log("Connected to WordPress");
@@ -60,11 +27,12 @@ async function main() {
   console.log("Authenticated as:", user.name);
   console.log("User slug:", user.slug);
 
-  const types = await fetchJson(typesUrl, {
-    headers: {
-      Authorization: `Basic ${auth}`,
-    },
-  });
+  const types = await fetchJson(
+    `${apiBase.wpV2}/types${apiBase.query}context=edit`,
+    {
+      headers: authHeaders,
+    }
+  );
   const postTypes = Object.entries(types).filter(([, type]: [string, any]) => {
     return type.viewable === true && type.rest_base;
   }).map(([slug, type]: [string, any]) => {
