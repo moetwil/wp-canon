@@ -64,12 +64,18 @@ type RankedOpportunity = LinkOpportunity & {
   source: PageSignals;
   targetPage?: PageSignals;
   anchor?: AnchorSuggestion;
+  insertion?: InsertionSuggestion;
 };
 
 type AnchorSuggestion = {
   text: string;
   confidence: "high" | "low";
   source: "existing-phrase" | "fallback";
+  score: number;
+};
+
+type InsertionSuggestion = {
+  context: string;
   score: number;
 };
 
@@ -272,6 +278,27 @@ const EDITORIAL_WORDS = new Set([
   "informatie",
   "onderwerp",
 ]);
+const CTA_WORDS = new Set(
+  [
+    "appointment",
+    "book",
+    "buy",
+    "call",
+    "contact",
+    "download",
+    "offer",
+    "quote",
+    "subscribe",
+    "afspraak",
+    "bel",
+    "bestel",
+    "contact",
+    "download",
+    "gratis",
+    "koop",
+    "offerte",
+  ].map(normalizeKeyword)
+);
 
 function cleanText(value: unknown) {
   return String(value ?? "")
@@ -456,8 +483,27 @@ function sentenceTexts(content: string) {
     .split(/(?<=[.!?])\s+|\n+/g)
     .map(cleanText)
     .filter((sentence) => {
-      return sentence.length >= 25 && /[.!?]$/.test(sentence);
+      return (
+        sentence.length >= 25 &&
+        /[.!?]$/.test(sentence) &&
+        !isIgnoredContextSentence(sentence)
+      );
     });
+}
+
+function isIgnoredContextSentence(sentence: string) {
+  const normalized = normalizeKeyword(sentence);
+  const keywords = keywordList(sentence);
+
+  if (Array.from(GENERIC_ANCHORS).some((anchor) => normalized.includes(anchor))) {
+    return true;
+  }
+
+  if (keywords.some((word) => CTA_WORDS.has(word)) && keywords.length <= 8) {
+    return true;
+  }
+
+  return isMostlyEditorialWords(keywords);
 }
 
 function phraseCandidates(content: string) {
@@ -681,6 +727,65 @@ function getAnchorSuggestion(
     : undefined;
 }
 
+function scoreInsertionContext(
+  sentence: string,
+  source: PageSignals,
+  target?: PageSignals,
+  anchor?: AnchorSuggestion
+) {
+  const sentenceKeywords = new Set(keywordList(sentence));
+  const targetOverlap = intersectionSize(sentenceKeywords, topicKeywords(target));
+  const sourceOverlap = intersectionSize(sentenceKeywords, topicKeywords(source));
+  const anchorOverlap = intersectionSize(sentenceKeywords, anchorWords(anchor?.text ?? ""));
+  const words = cleanText(sentence).split(/\s+/).filter(Boolean);
+
+  if (targetOverlap === 0 || words.length < 8 || words.length > 45) {
+    return 0;
+  }
+
+  /*
+   * Context scoring prefers readable sentences that already discuss the target
+   * topic, then gives a small boost when the chosen anchor or source topic is
+   * already nearby. This is deterministic triage, not semantic search.
+   */
+  return (
+    targetOverlap * 35 +
+    anchorOverlap * 20 +
+    Math.min(sourceOverlap, 3) * 5 +
+    (words.length >= 12 && words.length <= 30 ? 15 : 0) -
+    (hasTooManyStopwords(words) ? 15 : 0)
+  );
+}
+
+function getInsertionSuggestion(
+  source: PageSignals,
+  target?: PageSignals,
+  anchor?: AnchorSuggestion
+): InsertionSuggestion | undefined {
+  return sentenceTexts(source.body)
+    .map((sentence) => {
+      return {
+        context: truncateContext(sentence),
+        score: scoreInsertionContext(sentence, source, target, anchor),
+      };
+    })
+    .filter((suggestion) => suggestion.score > 0)
+    .sort((a, b) => b.score - a.score || a.context.length - b.context.length)[0];
+}
+
+function truncateContext(value: string) {
+  const text = cleanText(value);
+
+  if (text.length <= 220) {
+    return text;
+  }
+
+  const truncated = text.slice(0, 217);
+  const lastSpace = truncated.lastIndexOf(" ");
+
+  return `${truncated.slice(0, lastSpace > 120 ? lastSpace : 217)}...`;
+}
+
 function getTargetPage(target: string | undefined, pages: PageSignals[]) {
   return pages.find((page) => sameTarget(target, page));
 }
@@ -693,12 +798,14 @@ function getTopLinkOpportunities(pages: PageSignals[]) {
     .flatMap((source) => {
       return (source.item.linkOpportunities ?? []).map((opportunity) => {
         const targetPage = getTargetPage(opportunity.target, pages);
+        const anchor = getAnchorSuggestion(opportunity, source, targetPage);
 
         return {
           ...opportunity,
           source,
           targetPage,
-          anchor: getAnchorSuggestion(opportunity, source, targetPage),
+          anchor,
+          insertion: getInsertionSuggestion(source, targetPage, anchor),
         };
       });
     })
@@ -706,7 +813,8 @@ function getTopLinkOpportunities(pages: PageSignals[]) {
       return (
         (opportunity.relevanceScore ?? 0) >= MIN_LINK_RELEVANCE_SCORE &&
         !isUtilityPage(opportunity.targetPage ?? opportunity.source) &&
-        Boolean(opportunity.anchor)
+        Boolean(opportunity.anchor) &&
+        Boolean(opportunity.insertion)
       );
     })
     .sort((a, b) => {
@@ -899,7 +1007,7 @@ function topPriorities(
     ...opportunities.slice(0, 4).map((opportunity) => {
       return {
         title: `Add internal link: ${opportunity.source.title} -> ${opportunity.targetPage?.title ?? opportunity.target ?? "target"}`,
-        action: `${getAnchorActionLabel(opportunity.anchor)} "${opportunity.anchor?.text}" from ${opportunity.source.item.path} to ${opportunity.targetPage?.url ?? opportunity.target}.`,
+        action: `${getAnchorActionLabel(opportunity.anchor)} "${opportunity.anchor?.text}" in: "${opportunity.insertion?.context}"`,
         score: 80 + Math.min(opportunity.relevanceScore ?? 0, 100) / 5,
         ease: "Easy",
       };
@@ -960,17 +1068,23 @@ function bulletList(items: string[]) {
 }
 
 function renderLinkOpportunities(opportunities: RankedOpportunity[]) {
-  return bulletList(
-    opportunities.map((opportunity) => {
-      return `Source: ${opportunity.source.item.path} | Target: ${
-        opportunity.targetPage?.item.path ?? opportunity.targetPage?.url ?? opportunity.target ?? "unknown"
-      } | ${getAnchorActionLabel(opportunity.anchor)}: "${
-        opportunity.anchor?.text
-      }" | Anchor confidence: ${opportunity.anchor?.confidence ?? "unknown"} | Score: ${
-        opportunity.relevanceScore ?? "unknown"
-      }${opportunity.reason ? ` | Reason: ${opportunity.reason}` : ""}`;
+  if (opportunities.length === 0) {
+    return "- None found.";
+  }
+
+  return opportunities
+    .map((opportunity) => {
+      const targetUrl = opportunity.targetPage?.url ?? opportunity.target ?? "unknown";
+
+      return `- Source: ${opportunity.source.item.path}
+  - Target: ${opportunity.targetPage?.item.path ?? targetUrl}
+  - Suggested insertion context: "${opportunity.insertion?.context ?? "No context found"}"
+  - Suggested link: [${opportunity.anchor?.text ?? "anchor"}](${targetUrl})
+  - ${getAnchorActionLabel(opportunity.anchor)}: "${opportunity.anchor?.text}"
+  - Anchor confidence: ${opportunity.anchor?.confidence ?? "unknown"}
+  - Score: ${opportunity.relevanceScore ?? "unknown"}${opportunity.reason ? ` | Reason: ${opportunity.reason}` : ""}`;
     })
-  );
+    .join("\n");
 }
 
 function getAnchorActionLabel(anchor?: AnchorSuggestion) {
