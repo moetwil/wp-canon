@@ -152,11 +152,15 @@ const DEFAULT_LANGUAGE_PACK: AnchorLanguagePack = {
     "conclusion",
     "faq",
     "frequently asked questions",
+    "further reading",
     "introduction",
     "learn more",
+    "references",
     "read more",
+    "related",
     "related articles",
     "see also",
+    "sources",
     "summary",
   ],
   stopwords: [
@@ -194,7 +198,12 @@ const DEFAULT_LANGUAGE_PACK: AnchorLanguagePack = {
 const DUTCH_LANGUAGE_PACK: AnchorLanguagePack = {
   genericAnchors: [
     "bekijk ook",
+    "betrouwbare externe informatie",
+    "bronnen",
     "conclusie",
+    "externe bronnen",
+    "externe informatie",
+    "gerelateerde artikelen",
     "introductie",
     "lees meer",
     "samenvatting",
@@ -247,6 +256,22 @@ function mergeLanguagePackValues(key: keyof AnchorLanguagePack) {
 
 const GENERIC_ANCHORS = mergeLanguagePackValues("genericAnchors");
 const ANCHOR_STOPWORDS = mergeLanguagePackValues("stopwords");
+const EDITORIAL_WORDS = new Set([
+  ...Array.from(GENERIC_ANCHORS).flatMap((anchor) => anchor.split(/\s+/)),
+  "article",
+  "articles",
+  "external",
+  "information",
+  "source",
+  "topic",
+  "artikel",
+  "artikelen",
+  "betrouwbare",
+  "extern",
+  "externe",
+  "informatie",
+  "onderwerp",
+]);
 
 function cleanText(value: unknown) {
   return String(value ?? "")
@@ -346,6 +371,7 @@ function naturalAnchor(anchor: string) {
   const cleanAnchor = cleanText(anchor);
   const words = cleanAnchor.split(/\s+/).filter(Boolean);
   const normalized = normalizeKeyword(cleanAnchor);
+  const keywords = keywordList(cleanAnchor);
 
   if (
     !cleanAnchor ||
@@ -358,6 +384,14 @@ function naturalAnchor(anchor: string) {
   }
 
   if (Array.from(GENERIC_ANCHORS).some((anchor) => normalized.includes(anchor))) {
+    return "";
+  }
+
+  if (keywords.length === 0 || hasTooManyStopwords(words) || isMostlyEditorialWords(keywords)) {
+    return "";
+  }
+
+  if (hasWeirdCapitalBoundary(words)) {
     return "";
   }
 
@@ -389,18 +423,98 @@ function topicKeywords(page?: PageSignals) {
   ]);
 }
 
-function phraseCandidates(content: string) {
-  const text = cleanText(content);
-  const matches = text.match(/[A-Za-zÀ-ÿ0-9][A-Za-zÀ-ÿ0-9'’/-]*/g) ?? [];
-  const candidates: string[] = [];
+function stripNonSentenceBlocks(content: string) {
+  return content
+    .replace(/```[\s\S]*?```/g, "\n")
+    .replace(/<h[1-6][^>]*>[\s\S]*?<\/h[1-6]>/gi, "\n")
+    .replace(/^#{1,6}\s+.*$/gm, "\n")
+    .replace(/<nav[\s\S]*?<\/nav>/gi, "\n")
+    .replace(/<ul[\s\S]*?<\/ul>/gi, "\n")
+    .replace(/<ol[\s\S]*?<\/ol>/gi, "\n")
+    .split(/\n{2,}|<\/p>|<br\s*\/?>/gi)
+    .filter((block) => !isIgnoredAnchorBlock(block))
+    .join("\n");
+}
 
-  for (let size = 2; size <= 7; size += 1) {
-    for (let index = 0; index <= matches.length - size; index += 1) {
-      candidates.push(matches.slice(index, index + size).join(" "));
+function isIgnoredAnchorBlock(block: string) {
+  const text = cleanText(block);
+  const normalized = normalizeKeyword(text);
+
+  if (!text) {
+    return true;
+  }
+
+  if (/^\s*[-*+]\s+/m.test(block) || /^\s*\d+\.\s+/m.test(block)) {
+    return true;
+  }
+
+  return Array.from(GENERIC_ANCHORS).some((anchor) => normalized.includes(anchor));
+}
+
+function sentenceTexts(content: string) {
+  return stripNonSentenceBlocks(content)
+    .split(/(?<=[.!?])\s+|\n+/g)
+    .map(cleanText)
+    .filter((sentence) => {
+      return sentence.length >= 25 && /[.!?]$/.test(sentence);
+    });
+}
+
+function phraseCandidates(content: string) {
+  const candidates: Array<{ phrase: string; sentence: string }> = [];
+
+  for (const sentence of sentenceTexts(content)) {
+    const matches =
+      sentence.match(/[A-Za-zÀ-ÿ0-9][A-Za-zÀ-ÿ0-9'’/-]*/g) ?? [];
+
+    for (let size = 2; size <= 7; size += 1) {
+      for (let index = 0; index <= matches.length - size; index += 1) {
+        candidates.push({
+          phrase: matches.slice(index, index + size).join(" "),
+          sentence,
+        });
+      }
     }
   }
 
   return candidates;
+}
+
+function hasExactLowercaseOccurrence(phrase: string, sentence: string) {
+  return sentence.toLowerCase().includes(phrase.toLowerCase());
+}
+
+function hasTooManyStopwords(words: string[]) {
+  const stopwordCount = words.filter((word) => {
+    return ANCHOR_STOPWORDS.has(normalizeKeyword(word));
+  }).length;
+
+  return stopwordCount / words.length > 0.45;
+}
+
+function isMostlyEditorialWords(keywords: string[]) {
+  if (keywords.length === 0) {
+    return true;
+  }
+
+  const editorialCount = keywords.filter((word) => EDITORIAL_WORDS.has(word)).length;
+
+  return editorialCount / keywords.length >= 0.6;
+}
+
+function hasWeirdCapitalBoundary(words: string[]) {
+  return words.slice(1).some((word, index) => {
+    const previous = words[index];
+
+    return /^[A-ZÀ-Ý]/.test(word) && /^[a-zà-ÿ]/.test(previous);
+  });
+}
+
+function hasBoundaryLeakWords(anchor: string) {
+  const normalizedWords = cleanText(anchor).split(/\s+/).map(normalizeKeyword);
+  const boundaryWords = new Set(["which", "what", "where", "when", "how", "welke", "wat", "waar", "wanneer", "hoe"]);
+
+  return normalizedWords.slice(1).some((word) => boundaryWords.has(word));
 }
 
 function isFullLongTitle(anchor: string, target?: PageSignals) {
@@ -452,11 +566,20 @@ function scoreAnchorCandidate(
   anchor: string,
   source: PageSignals,
   target?: PageSignals,
-  existsInSource = false
+  existsInSource = false,
+  sentence?: string
 ) {
   const cleanAnchor = naturalAnchor(anchor);
 
-  if (!cleanAnchor || isFullLongTitle(cleanAnchor, target)) {
+  if (
+    !cleanAnchor ||
+    isFullLongTitle(cleanAnchor, target) ||
+    hasBoundaryLeakWords(cleanAnchor)
+  ) {
+    return 0;
+  }
+
+  if (existsInSource && (!sentence || !hasExactLowercaseOccurrence(cleanAnchor, sentence))) {
     return 0;
   }
 
@@ -479,7 +602,8 @@ function scoreAnchorCandidate(
     targetOverlap * 25 +
     sourceOverlap * 15 +
     (words.length >= 2 && words.length <= 5 ? 15 : 0) -
-    (words.length > 5 ? 10 : 0)
+    (words.length > 5 ? 10 : 0) -
+    (hasTooManyStopwords(words) ? 30 : 0)
   );
 }
 
@@ -487,10 +611,15 @@ function getBestExistingAnchor(source: PageSignals, target?: PageSignals) {
   const seen = new Set<string>();
 
   return phraseCandidates(source.body)
-    .map((candidate) => naturalAnchor(candidate))
-    .filter(Boolean)
+    .map((candidate) => {
+      return {
+        ...candidate,
+        phrase: naturalAnchor(candidate.phrase),
+      };
+    })
+    .filter((candidate) => Boolean(candidate.phrase))
     .filter((candidate) => {
-      const key = normalizeKeyword(candidate);
+      const key = normalizeKeyword(candidate.phrase);
 
       if (seen.has(key)) {
         return false;
@@ -501,10 +630,10 @@ function getBestExistingAnchor(source: PageSignals, target?: PageSignals) {
     })
     .map((candidate) => {
       return {
-        text: candidate,
+        text: candidate.phrase,
         confidence: "high" as const,
         source: "existing-phrase" as const,
-        score: scoreAnchorCandidate(candidate, source, target, true),
+        score: scoreAnchorCandidate(candidate.phrase, source, target, true, candidate.sentence),
       };
     })
     .filter((anchor) => anchor.score > 0)
