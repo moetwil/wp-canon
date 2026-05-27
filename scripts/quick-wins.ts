@@ -63,7 +63,14 @@ type PageSignals = {
 type RankedOpportunity = LinkOpportunity & {
   source: PageSignals;
   targetPage?: PageSignals;
-  preferredAnchor?: string;
+  anchor?: AnchorSuggestion;
+};
+
+type AnchorSuggestion = {
+  text: string;
+  confidence: "high" | "low";
+  source: "existing-phrase" | "fallback";
+  score: number;
 };
 
 type Issue = {
@@ -131,6 +138,115 @@ const FOCUS_KEYWORD_KEYS = [
   "rank_math_focus_keyword",
   "_yoast_wpseo_focuskw",
 ];
+
+type AnchorLanguagePack = {
+  genericAnchors: string[];
+  stopwords: string[];
+};
+
+// Lightweight language packs for anchor filtering. These are broad editorial
+// defaults, not site-specific SEO rules, and can be extended per project later.
+const DEFAULT_LANGUAGE_PACK: AnchorLanguagePack = {
+  genericAnchors: [
+    "also see",
+    "conclusion",
+    "faq",
+    "frequently asked questions",
+    "introduction",
+    "learn more",
+    "read more",
+    "related articles",
+    "see also",
+    "summary",
+  ],
+  stopwords: [
+    "a",
+    "about",
+    "also",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "how",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "the",
+    "this",
+    "to",
+    "what",
+    "when",
+    "where",
+    "with",
+    "you",
+    "your",
+  ],
+};
+
+const DUTCH_LANGUAGE_PACK: AnchorLanguagePack = {
+  genericAnchors: [
+    "bekijk ook",
+    "conclusie",
+    "introductie",
+    "lees meer",
+    "samenvatting",
+    "snelle samenvatting",
+    "veelgestelde vragen",
+  ],
+  stopwords: [
+    "aan",
+    "als",
+    "bij",
+    "dat",
+    "de",
+    "die",
+    "dit",
+    "een",
+    "en",
+    "er",
+    "het",
+    "hoe",
+    "in",
+    "is",
+    "je",
+    "kan",
+    "met",
+    "niet",
+    "of",
+    "om",
+    "op",
+    "te",
+    "tot",
+    "van",
+    "voor",
+    "wat",
+    "waar",
+    "wanneer",
+    "we",
+    "zijn",
+  ],
+};
+
+// TODO: Allow config/semantic.json to override or extend these packs, e.g.
+// quickWins.genericAnchors, quickWins.stopwords, quickWins.languagePacks.
+const ACTIVE_LANGUAGE_PACKS = [DEFAULT_LANGUAGE_PACK, DUTCH_LANGUAGE_PACK];
+
+function mergeLanguagePackValues(key: keyof AnchorLanguagePack) {
+  return new Set(
+    ACTIVE_LANGUAGE_PACKS.flatMap((pack) => pack[key]).map(normalizeKeyword)
+  );
+}
+
+const GENERIC_ANCHORS = mergeLanguagePackValues("genericAnchors");
+const ANCHOR_STOPWORDS = mergeLanguagePackValues("stopwords");
 
 function cleanText(value: unknown) {
   return String(value ?? "")
@@ -229,16 +345,19 @@ function sameTarget(target: string | undefined, page: PageSignals) {
 function naturalAnchor(anchor: string) {
   const cleanAnchor = cleanText(anchor);
   const words = cleanAnchor.split(/\s+/).filter(Boolean);
+  const normalized = normalizeKeyword(cleanAnchor);
 
-  if (!cleanAnchor || cleanAnchor.length > 60 || words.length === 0) {
+  if (
+    !cleanAnchor ||
+    cleanAnchor.length > 70 ||
+    words.length < 2 ||
+    words.length > 7 ||
+    GENERIC_ANCHORS.has(normalized)
+  ) {
     return "";
   }
 
-  if (words.length >= 3 && !/[A-ZÀ-Ý]/.test(cleanAnchor) && !/[&'’]/.test(cleanAnchor)) {
-    return "";
-  }
-
-  if (words.length < 3 && cleanAnchor.length < 8) {
+  if (Array.from(GENERIC_ANCHORS).some((anchor) => normalized.includes(anchor))) {
     return "";
   }
 
@@ -249,25 +368,188 @@ function slugAnchor(slug?: string) {
   return naturalAnchor(String(slug ?? "").replace(/[-_]+/g, " "));
 }
 
-function getPreferredAnchor(opportunity: LinkOpportunity, target?: PageSignals) {
-  const candidates = [
-    target?.title,
-    slugAnchor(target?.item.slug),
-    ...(opportunity.suggestedAnchors ?? []),
-  ];
-  const seen = new Set<string>();
+function keywordList(value: string) {
+  return cleanText(value)
+    .split(/[^a-zA-Z0-9À-ÿ]+/i)
+    .map(normalizeKeyword)
+    .filter((word) => {
+      return word.length > 2 && !/^\d+$/.test(word) && !ANCHOR_STOPWORDS.has(word);
+    });
+}
 
-  for (const candidate of candidates) {
-    const anchor = naturalAnchor(String(candidate ?? ""));
-    const key = normalizeKeyword(anchor);
+function topicKeywords(page?: PageSignals) {
+  if (!page) {
+    return new Set<string>();
+  }
 
-    if (anchor && !seen.has(key)) {
-      seen.add(key);
-      return anchor;
+  return new Set([
+    ...keywordList(page.title),
+    ...keywordList(page.item.slug ?? ""),
+    ...(page.item.contentKeywords ?? []).map(normalizeKeyword),
+  ]);
+}
+
+function phraseCandidates(content: string) {
+  const text = cleanText(content);
+  const matches = text.match(/[A-Za-zÀ-ÿ0-9][A-Za-zÀ-ÿ0-9'’/-]*/g) ?? [];
+  const candidates: string[] = [];
+
+  for (let size = 2; size <= 7; size += 1) {
+    for (let index = 0; index <= matches.length - size; index += 1) {
+      candidates.push(matches.slice(index, index + size).join(" "));
     }
   }
 
-  return target?.title ?? "";
+  return candidates;
+}
+
+function isFullLongTitle(anchor: string, target?: PageSignals) {
+  if (!target) {
+    return false;
+  }
+
+  return normalizeKeyword(anchor) === normalizeKeyword(target.title) && anchor.split(/\s+/).length > 5;
+}
+
+function getFallbackAnchor(target?: PageSignals) {
+  if (!target) {
+    return "";
+  }
+
+  const titleAnchor = naturalAnchor(target.title);
+
+  if (titleAnchor && !isFullLongTitle(titleAnchor, target)) {
+    return titleAnchor;
+  }
+
+  const titleWords = cleanText(target.title).split(/\s+/);
+  const titleKeywords = keywordList(target.title);
+  const phraseWords = titleWords.filter((word) => {
+    return titleKeywords.includes(normalizeKeyword(word));
+  });
+  const phrase = naturalAnchor(phraseWords.slice(0, 5).join(" "));
+
+  return phrase || slugAnchor(target.item.slug);
+}
+
+function anchorWords(anchor: string) {
+  return new Set(keywordList(anchor));
+}
+
+function intersectionSize(first: Set<string>, second: Set<string>) {
+  let total = 0;
+
+  for (const value of first) {
+    if (second.has(value)) {
+      total += 1;
+    }
+  }
+
+  return total;
+}
+
+function scoreAnchorCandidate(
+  anchor: string,
+  source: PageSignals,
+  target?: PageSignals,
+  existsInSource = false
+) {
+  const cleanAnchor = naturalAnchor(anchor);
+
+  if (!cleanAnchor || isFullLongTitle(cleanAnchor, target)) {
+    return 0;
+  }
+
+  const words = cleanAnchor.split(/\s+/);
+  const anchorKeywordSet = anchorWords(cleanAnchor);
+  const sourceOverlap = intersectionSize(anchorKeywordSet, topicKeywords(source));
+  const targetOverlap = intersectionSize(anchorKeywordSet, topicKeywords(target));
+
+  if (targetOverlap === 0) {
+    return 0;
+  }
+
+  /*
+   * Anchor scoring intentionally favors phrases already present in the source
+   * copy, then rewards overlap with both source and target topics. This keeps
+   * suggestions actionable while avoiding section labels and random fragments.
+   */
+  return (
+    (existsInSource ? 45 : 0) +
+    targetOverlap * 25 +
+    sourceOverlap * 15 +
+    (words.length >= 2 && words.length <= 5 ? 15 : 0) -
+    (words.length > 5 ? 10 : 0)
+  );
+}
+
+function getBestExistingAnchor(source: PageSignals, target?: PageSignals) {
+  const seen = new Set<string>();
+
+  return phraseCandidates(source.body)
+    .map((candidate) => naturalAnchor(candidate))
+    .filter(Boolean)
+    .filter((candidate) => {
+      const key = normalizeKeyword(candidate);
+
+      if (seen.has(key)) {
+        return false;
+      }
+
+      seen.add(key);
+      return true;
+    })
+    .map((candidate) => {
+      return {
+        text: candidate,
+        confidence: "high" as const,
+        source: "existing-phrase" as const,
+        score: scoreAnchorCandidate(candidate, source, target, true),
+      };
+    })
+    .filter((anchor) => anchor.score > 0)
+    .sort((a, b) => b.score - a.score || a.text.length - b.text.length)[0];
+}
+
+function getAnchorSuggestion(
+  opportunity: LinkOpportunity,
+  source: PageSignals,
+  target?: PageSignals
+): AnchorSuggestion | undefined {
+  const existingAnchor = getBestExistingAnchor(source, target);
+
+  if (existingAnchor && existingAnchor.score >= 85) {
+    return existingAnchor;
+  }
+
+  const fallbackCandidates = [
+    getFallbackAnchor(target),
+    ...(opportunity.suggestedAnchors ?? []),
+  ];
+  const fallback = fallbackCandidates
+    .map((candidate) => naturalAnchor(candidate))
+    .filter(Boolean)
+    .map((candidate) => {
+      return {
+        text: candidate,
+        confidence: "low" as const,
+        source: "fallback" as const,
+        score: scoreAnchorCandidate(candidate, source, target, false),
+      };
+    })
+    .filter((anchor) => anchor.score > 0)
+    .sort((a, b) => b.score - a.score || a.text.length - b.text.length)[0];
+
+  if (fallback) {
+    return fallback;
+  }
+
+  return existingAnchor
+    ? {
+        ...existingAnchor,
+        confidence: "low",
+      }
+    : undefined;
 }
 
 function getTargetPage(target: string | undefined, pages: PageSignals[]) {
@@ -287,7 +569,7 @@ function getTopLinkOpportunities(pages: PageSignals[]) {
           ...opportunity,
           source,
           targetPage,
-          preferredAnchor: getPreferredAnchor(opportunity, targetPage),
+          anchor: getAnchorSuggestion(opportunity, source, targetPage),
         };
       });
     })
@@ -295,7 +577,7 @@ function getTopLinkOpportunities(pages: PageSignals[]) {
       return (
         (opportunity.relevanceScore ?? 0) >= MIN_LINK_RELEVANCE_SCORE &&
         !isUtilityPage(opportunity.targetPage ?? opportunity.source) &&
-        Boolean(opportunity.preferredAnchor)
+        Boolean(opportunity.anchor)
       );
     })
     .sort((a, b) => {
@@ -488,7 +770,7 @@ function topPriorities(
     ...opportunities.slice(0, 4).map((opportunity) => {
       return {
         title: `Add internal link: ${opportunity.source.title} -> ${opportunity.targetPage?.title ?? opportunity.target ?? "target"}`,
-        action: `Use anchor "${opportunity.preferredAnchor}" from ${opportunity.source.item.path} to ${opportunity.targetPage?.url ?? opportunity.target}.`,
+        action: `${getAnchorActionLabel(opportunity.anchor)} "${opportunity.anchor?.text}" from ${opportunity.source.item.path} to ${opportunity.targetPage?.url ?? opportunity.target}.`,
         score: 80 + Math.min(opportunity.relevanceScore ?? 0, 100) / 5,
         ease: "Easy",
       };
@@ -553,11 +835,19 @@ function renderLinkOpportunities(opportunities: RankedOpportunity[]) {
     opportunities.map((opportunity) => {
       return `Source: ${opportunity.source.item.path} | Target: ${
         opportunity.targetPage?.item.path ?? opportunity.targetPage?.url ?? opportunity.target ?? "unknown"
-      } | Anchor: "${opportunity.preferredAnchor}" | Score: ${
+      } | ${getAnchorActionLabel(opportunity.anchor)}: "${
+        opportunity.anchor?.text
+      }" | Anchor confidence: ${opportunity.anchor?.confidence ?? "unknown"} | Score: ${
         opportunity.relevanceScore ?? "unknown"
       }${opportunity.reason ? ` | Reason: ${opportunity.reason}` : ""}`;
     })
   );
+}
+
+function getAnchorActionLabel(anchor?: AnchorSuggestion) {
+  return anchor?.source === "existing-phrase" && anchor.confidence === "high"
+    ? "Use existing phrase"
+    : "Suggested anchor idea";
 }
 
 function renderWeakPages(pages: PageSignals[], allPages: PageSignals[]) {
