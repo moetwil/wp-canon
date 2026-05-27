@@ -8,6 +8,8 @@ const MAX_ORPHAN_ITEMS = 10;
 const MAX_METADATA_ITEMS = 10;
 const MAX_STRUCTURE_ITEMS = 10;
 const MIN_LINK_RELEVANCE_SCORE = 60;
+const MIN_TARGET_SPECIFICITY_SCORE = 25;
+const MIN_ANCHOR_ALIGNMENT_SCORE = 35;
 const LOW_INBOUND_LINK_COUNT = 1;
 const TITLE_MIN_LENGTH = 30;
 const TITLE_MAX_LENGTH = 60;
@@ -65,6 +67,8 @@ type RankedOpportunity = LinkOpportunity & {
   targetPage?: PageSignals;
   anchor?: AnchorSuggestion;
   insertion?: InsertionSuggestion;
+  targetSpecificityScore: number;
+  anchorAlignmentScore: number;
 };
 
 type AnchorSuggestion = {
@@ -91,6 +95,11 @@ type PriorityItem = {
   action: string;
   score: number;
   ease: string;
+};
+
+type KeywordStats = {
+  pageCount: number;
+  documentFrequency: Map<string, number>;
 };
 
 const UTILITY_PATTERNS = [
@@ -450,6 +459,70 @@ function topicKeywords(page?: PageSignals) {
   ]);
 }
 
+function weightedTargetKeywords(page?: PageSignals) {
+  if (!page) {
+    return [];
+  }
+
+  const scores = new Map<string, number>();
+
+  for (const keyword of keywordList(page.title)) {
+    scores.set(keyword, (scores.get(keyword) ?? 0) + 4);
+  }
+  for (const keyword of keywordList(page.item.slug ?? "")) {
+    scores.set(keyword, (scores.get(keyword) ?? 0) + 4);
+  }
+  for (const keyword of page.item.contentKeywords ?? []) {
+    const normalized = normalizeKeyword(keyword);
+
+    if (normalized && !ANCHOR_STOPWORDS.has(normalized)) {
+      scores.set(normalized, (scores.get(normalized) ?? 0) + 1);
+    }
+  }
+
+  return Array.from(scores.entries()).sort((a, b) => b[1] - a[1]);
+}
+
+function getKeywordStats(pages: PageSignals[]): KeywordStats {
+  const documentFrequency = new Map<string, number>();
+
+  for (const page of pages) {
+    for (const keyword of topicKeywords(page)) {
+      documentFrequency.set(keyword, (documentFrequency.get(keyword) ?? 0) + 1);
+    }
+  }
+
+  return { pageCount: pages.length, documentFrequency };
+}
+
+function isBroadKeyword(keyword: string, stats: KeywordStats) {
+  const frequency = stats.documentFrequency.get(keyword) ?? 0;
+  const broadThreshold = Math.max(3, Math.ceil(stats.pageCount * 0.25));
+
+  return frequency >= broadThreshold;
+}
+
+function distinctiveTargetKeywords(page: PageSignals | undefined, stats: KeywordStats) {
+  const weighted = weightedTargetKeywords(page);
+  const distinctive = weighted
+    .filter(([keyword]) => {
+      return !isBroadKeyword(keyword, stats) && !EDITORIAL_WORDS.has(keyword);
+    })
+    .map(([keyword]) => keyword)
+    .slice(0, 8);
+
+  if (distinctive.length > 0) {
+    return new Set(distinctive);
+  }
+
+  return new Set(
+    weighted
+      .filter(([keyword]) => !EDITORIAL_WORDS.has(keyword))
+      .map(([keyword]) => keyword)
+      .slice(0, 5)
+  );
+}
+
 function stripNonSentenceBlocks(content: string) {
   return content
     .replace(/```[\s\S]*?```/g, "\n")
@@ -612,6 +685,7 @@ function scoreAnchorCandidate(
   anchor: string,
   source: PageSignals,
   target?: PageSignals,
+  stats?: KeywordStats,
   existsInSource = false,
   sentence?: string
 ) {
@@ -633,8 +707,11 @@ function scoreAnchorCandidate(
   const anchorKeywordSet = anchorWords(cleanAnchor);
   const sourceOverlap = intersectionSize(anchorKeywordSet, topicKeywords(source));
   const targetOverlap = intersectionSize(anchorKeywordSet, topicKeywords(target));
+  const distinctiveOverlap = stats
+    ? intersectionSize(anchorKeywordSet, distinctiveTargetKeywords(target, stats))
+    : targetOverlap;
 
-  if (targetOverlap === 0) {
+  if (targetOverlap === 0 || distinctiveOverlap === 0) {
     return 0;
   }
 
@@ -645,6 +722,7 @@ function scoreAnchorCandidate(
    */
   return (
     (existsInSource ? 45 : 0) +
+    distinctiveOverlap * 45 +
     targetOverlap * 25 +
     sourceOverlap * 15 +
     (words.length >= 2 && words.length <= 5 ? 15 : 0) -
@@ -653,7 +731,11 @@ function scoreAnchorCandidate(
   );
 }
 
-function getBestExistingAnchor(source: PageSignals, target?: PageSignals) {
+function getBestExistingAnchor(
+  source: PageSignals,
+  target: PageSignals | undefined,
+  stats: KeywordStats
+) {
   const seen = new Set<string>();
 
   return phraseCandidates(source.body)
@@ -679,7 +761,14 @@ function getBestExistingAnchor(source: PageSignals, target?: PageSignals) {
         text: candidate.phrase,
         confidence: "high" as const,
         source: "existing-phrase" as const,
-        score: scoreAnchorCandidate(candidate.phrase, source, target, true, candidate.sentence),
+        score: scoreAnchorCandidate(
+          candidate.phrase,
+          source,
+          target,
+          stats,
+          true,
+          candidate.sentence
+        ),
       };
     })
     .filter((anchor) => anchor.score > 0)
@@ -689,9 +778,10 @@ function getBestExistingAnchor(source: PageSignals, target?: PageSignals) {
 function getAnchorSuggestion(
   opportunity: LinkOpportunity,
   source: PageSignals,
-  target?: PageSignals
+  target: PageSignals | undefined,
+  stats: KeywordStats
 ): AnchorSuggestion | undefined {
-  const existingAnchor = getBestExistingAnchor(source, target);
+  const existingAnchor = getBestExistingAnchor(source, target, stats);
 
   if (existingAnchor && existingAnchor.score >= 85) {
     return existingAnchor;
@@ -709,7 +799,7 @@ function getAnchorSuggestion(
         text: candidate,
         confidence: "low" as const,
         source: "fallback" as const,
-        score: scoreAnchorCandidate(candidate, source, target, false),
+        score: scoreAnchorCandidate(candidate, source, target, stats, false),
       };
     })
     .filter((anchor) => anchor.score > 0)
@@ -731,15 +821,19 @@ function scoreInsertionContext(
   sentence: string,
   source: PageSignals,
   target?: PageSignals,
-  anchor?: AnchorSuggestion
+  anchor?: AnchorSuggestion,
+  stats?: KeywordStats
 ) {
   const sentenceKeywords = new Set(keywordList(sentence));
   const targetOverlap = intersectionSize(sentenceKeywords, topicKeywords(target));
+  const distinctiveOverlap = stats
+    ? intersectionSize(sentenceKeywords, distinctiveTargetKeywords(target, stats))
+    : targetOverlap;
   const sourceOverlap = intersectionSize(sentenceKeywords, topicKeywords(source));
   const anchorOverlap = intersectionSize(sentenceKeywords, anchorWords(anchor?.text ?? ""));
   const words = cleanText(sentence).split(/\s+/).filter(Boolean);
 
-  if (targetOverlap === 0 || words.length < 8 || words.length > 45) {
+  if (targetOverlap === 0 || distinctiveOverlap === 0 || words.length < 8 || words.length > 45) {
     return 0;
   }
 
@@ -749,6 +843,7 @@ function scoreInsertionContext(
    * already nearby. This is deterministic triage, not semantic search.
    */
   return (
+    distinctiveOverlap * 45 +
     targetOverlap * 35 +
     anchorOverlap * 20 +
     Math.min(sourceOverlap, 3) * 5 +
@@ -760,13 +855,14 @@ function scoreInsertionContext(
 function getInsertionSuggestion(
   source: PageSignals,
   target?: PageSignals,
-  anchor?: AnchorSuggestion
+  anchor?: AnchorSuggestion,
+  stats?: KeywordStats
 ): InsertionSuggestion | undefined {
   return sentenceTexts(source.body)
     .map((sentence) => {
       return {
         context: truncateContext(sentence),
-        score: scoreInsertionContext(sentence, source, target, anchor),
+        score: scoreInsertionContext(sentence, source, target, anchor, stats),
       };
     })
     .filter((suggestion) => suggestion.score > 0)
@@ -790,28 +886,79 @@ function getTargetPage(target: string | undefined, pages: PageSignals[]) {
   return pages.find((page) => sameTarget(target, page));
 }
 
+function getAnchorAlignmentScore(
+  anchor: AnchorSuggestion | undefined,
+  target: PageSignals | undefined,
+  stats: KeywordStats
+) {
+  if (!anchor || !target) {
+    return 0;
+  }
+
+  const anchorKeywordSet = anchorWords(anchor.text);
+  const distinctiveOverlap = intersectionSize(
+    anchorKeywordSet,
+    distinctiveTargetKeywords(target, stats)
+  );
+  const broadOverlap = Array.from(anchorKeywordSet).filter((keyword) => {
+    return isBroadKeyword(keyword, stats);
+  }).length;
+
+  return Math.max(0, distinctiveOverlap * 60 - broadOverlap * 15);
+}
+
+function getTargetSpecificityScore(
+  source: PageSignals,
+  target: PageSignals | undefined,
+  insertion: InsertionSuggestion | undefined,
+  stats: KeywordStats
+) {
+  if (!target) {
+    return 0;
+  }
+
+  const distinctive = distinctiveTargetKeywords(target, stats);
+  const sourceOverlap = intersectionSize(topicKeywords(source), distinctive);
+  const contextOverlap = insertion
+    ? intersectionSize(new Set(keywordList(insertion.context)), distinctive)
+    : 0;
+
+  return sourceOverlap * 30 + contextOverlap * 50;
+}
+
 function getTopLinkOpportunities(pages: PageSignals[]) {
   const seenSources = new Set<string>();
+  const stats = getKeywordStats(pages);
 
   return pages
     .filter((page) => !isUtilityPage(page))
     .flatMap((source) => {
       return (source.item.linkOpportunities ?? []).map((opportunity) => {
         const targetPage = getTargetPage(opportunity.target, pages);
-        const anchor = getAnchorSuggestion(opportunity, source, targetPage);
+        const anchor = getAnchorSuggestion(opportunity, source, targetPage, stats);
+        const insertion = getInsertionSuggestion(source, targetPage, anchor, stats);
 
         return {
           ...opportunity,
           source,
           targetPage,
           anchor,
-          insertion: getInsertionSuggestion(source, targetPage, anchor),
+          insertion,
+          targetSpecificityScore: getTargetSpecificityScore(
+            source,
+            targetPage,
+            insertion,
+            stats
+          ),
+          anchorAlignmentScore: getAnchorAlignmentScore(anchor, targetPage, stats),
         };
       });
     })
     .filter((opportunity) => {
       return (
         (opportunity.relevanceScore ?? 0) >= MIN_LINK_RELEVANCE_SCORE &&
+        opportunity.targetSpecificityScore >= MIN_TARGET_SPECIFICITY_SCORE &&
+        opportunity.anchorAlignmentScore >= MIN_ANCHOR_ALIGNMENT_SCORE &&
         !isUtilityPage(opportunity.targetPage ?? opportunity.source) &&
         Boolean(opportunity.anchor) &&
         Boolean(opportunity.insertion)
@@ -819,6 +966,8 @@ function getTopLinkOpportunities(pages: PageSignals[]) {
     })
     .sort((a, b) => {
       return (
+        b.targetSpecificityScore - a.targetSpecificityScore ||
+        b.anchorAlignmentScore - a.anchorAlignmentScore ||
         (b.relevanceScore ?? 0) - (a.relevanceScore ?? 0) ||
         (a.source.item.path ?? "").localeCompare(b.source.item.path ?? "")
       );
@@ -1082,6 +1231,8 @@ function renderLinkOpportunities(opportunities: RankedOpportunity[]) {
   - Suggested link: [${opportunity.anchor?.text ?? "anchor"}](${targetUrl})
   - ${getAnchorActionLabel(opportunity.anchor)}: "${opportunity.anchor?.text}"
   - Anchor confidence: ${opportunity.anchor?.confidence ?? "unknown"}
+  - Target specificity score: ${opportunity.targetSpecificityScore}
+  - Anchor alignment score: ${opportunity.anchorAlignmentScore}
   - Score: ${opportunity.relevanceScore ?? "unknown"}${opportunity.reason ? ` | Reason: ${opportunity.reason}` : ""}`;
     })
     .join("\n");
