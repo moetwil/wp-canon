@@ -9,7 +9,8 @@
     "pull": "tsx scripts/pull.ts",
     "index": "tsx scripts/index.ts",
     "report": "tsx scripts/report.ts",
-    "tasks": "tsx scripts/tasks.ts"
+    "tasks": "tsx scripts/tasks.ts",
+    "quick-wins": "tsx scripts/quick-wins.ts"
   },
   "keywords": [],
   "author": "",
