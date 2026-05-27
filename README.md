@@ -1,107 +1,282 @@
 # WP Canon
 
-Turn a WordPress site into an AI-ready content repo.
+Turn a WordPress site into a local, AI-ready content repo.
 
-## What It Does
+WP Canon pulls your WordPress content into structured markdown and generates lightweight indexes, reports, and SEO task data that work well with Claude, Codex, ChatGPT, and other coding agents.
 
-- Connects to the WordPress REST API
-- Discovers post types and taxonomies
-- Scaffolds content folders
-- Pulls posts into markdown
-- Generates content and term indexes
+The goal is simple:
 
-## Why This Exists
+- own your website content locally
+- reduce token usage
+- give AI agents structured context instead of scraped HTML
+- build reproducible SEO/content workflows
 
-- Cleaner context for Claude/Codex
-- Fewer tokens than scraping websites
-- Structured content as source material
+---
 
-## Quick Start
+# What It Does
 
-```sh
-npm install
-cp .env.example .env
-npm run discover
-npm run pull
-npm run index
-npm run quick-wins
-```
+WP Canon currently supports:
 
-Edit `.env` before running the scripts:
+- WordPress REST API discovery
+- Post type and taxonomy detection
+- Markdown content export
+- Taxonomy relationship mapping
+- Internal link indexing
+- SEO/content reports
+- Agent-friendly task generation
 
-```env
-WP_URL=http://localhost:8080
-WP_USERNAME=admin
-WP_APP_PASSWORD=your application password
-```
+Outputs are designed for:
+- Claude
+- Codex
+- ChatGPT
+- local AI workflows
+- SEO automation
+- content audits
+- Git-based content pipelines
 
-`npm run pull` also generates `data/taxonomy-terms.json` with REST-visible term names, slugs, parents, and links. `npm run index` generates `data/content-index.json` with each item's title, slug, type, status, local file path, terms, internal links, and a compact `termIndex` that maps taxonomy terms back to local content. This gives Claude/Codex a low-token overview of the website and its SEO relationships.
+---
 
-## Reports And Tasks
+# Why This Exists
 
-Generate the general content graph report:
+Most AI workflows for WordPress are still:
+- copy/paste based
+- scraping based
+- noisy
+- token expensive
+- difficult to reproduce
 
-```sh
-npm run report
-```
+WP Canon creates a structured local content layer instead.
 
-Generate a practical SEO quick-wins report:
+Instead of giving an AI model raw website HTML, you give it:
+- markdown content
+- metadata
+- taxonomy relationships
+- internal link graphs
+- quick-win reports
+- task files
 
-```sh
-npm run quick-wins
-```
+This produces:
+- cleaner prompts
+- lower token usage
+- more reliable output
+- easier automation
 
-This writes `reports/quick-wins.md` with prioritized internal links, orphan/low-link pages, weak metadata checks, content structure checks, and a short "Do these first" list.
+---
 
-Generate agent-friendly task files:
+# Quick Start
 
-```sh
-npm run tasks
-```
+Install dependencies:
 
-## Local WordPress Development
+sh npm install 
+
+Create your environment file:
+
+sh cp .env.example .env 
+
+Configure WordPress credentials:
+
+env WP_URL=http://localhost:8080 WP_USERNAME=admin WP_APP_PASSWORD=your application password 
+
+Run the pipeline:
+
+sh npm run discover npm run pull npm run index npm run quick-wins 
+
+---
+
+# Pipeline Overview
+
+## 1. Discover
+
+sh npm run discover 
+
+Discovers:
+- post types
+- taxonomies
+- REST API structure
+
+Outputs:
+- data/discovery.json
+
+---
+
+## 2. Pull
+
+sh npm run pull 
+
+Pulls WordPress content into local markdown files.
+
+Outputs:
+- content/
+- data/taxonomy-terms.json
+
+Each markdown file includes:
+- title
+- slug
+- metadata
+- original URL
+- cleaned content
+
+---
+
+## 3. Index
+
+sh npm run index 
+
+Builds a lightweight content graph.
+
+Outputs:
+- data/content-index.json
+
+Includes:
+- titles
+- slugs
+- local paths
+- taxonomies
+- internal links
+- orphan detection
+- term relationships
+- semantic grouping signals
+
+This file is designed specifically for AI agents and low-token context loading.
+
+---
+
+## 4. Quick Wins
+
+sh npm run quick-wins 
+
+Generates a practical SEO/content audit.
+
+Outputs:
+- reports/quick-wins.md
+
+Includes:
+- internal link opportunities
+- orphan pages
+- weak metadata
+- thin content
+- heading structure issues
+- prioritized action lists
+
+The report is deterministic and designed for safe human review.
+
+---
+
+## 5. Tasks
+
+sh npm run tasks 
+
+Generates agent-friendly task files that can be consumed by:
+- Claude
+- Codex
+- Cursor
+- ChatGPT
+- custom automation
+
+---
+
+# Example AI Workflow
+
+Example Claude/Codex prompt:
+
+text Using data/content-index.json and reports/quick-wins.md:  - identify the highest-value orphan pages - suggest internal links - propose improved meta titles - do not invent URLs or content - only use files from content/ 
+
+---
+
+# Local WordPress Development
 
 Requirements:
-
-- Docker installed
+- Docker
 
 Start local WordPress:
 
-```sh
-cd docker
-docker compose up -d
-```
+sh cd docker docker compose up -d 
 
 Open:
 
-```text
-http://localhost:8080
-```
+text http://localhost:8080 
 
-Install WordPress manually. Recommended local credentials:
+Recommended local credentials:
 
-```text
-username: admin
-password: admin
-```
+text username: admin password: admin 
 
 Create an Application Password:
 
-```text
-Users -> Profile -> Application Passwords
-```
+text Users -> Profile -> Application Passwords 
 
-The Docker WordPress setup includes a local development mu-plugin that enables Application Passwords over HTTP. This Docker setup is for local development only.
+The included local mu-plugin enables Application Passwords over HTTP for local development only.
 
-## Safety
+---
 
-Do not commit `.env`, content output, or data output.
+# Project Philosophy
 
-## Roadmap
+WP Canon is intentionally:
 
-- Custom post type pulling
-- Better markdown cleanup
-- Better taxonomy and relationship index
-- Draft push back to WordPress
-- WooCommerce module
-- SEO plugin metadata support
+- local-first
+- markdown-first
+- deterministic where possible
+- automation-friendly
+- Git-friendly
+- AI-agent-friendly
+
+The project is not trying to replace SEO tools or become a fully autonomous SEO agent.
+
+It is a structured content layer for developers, agencies, and AI workflows.
+
+---
+
+# Current Status
+
+WP Canon is early-stage but already useful for:
+
+- agencies
+- technical SEO
+- AI-assisted content workflows
+- WordPress migrations
+- content auditing
+- internal linking workflows
+- local AI experimentation
+
+The project is not yet production-grade automation software.
+
+Human review is still expected.
+
+---
+
+# Safety
+
+Do not commit:
+- .env
+- generated content
+- generated data
+- reports
+
+Recommended .gitignore entries:
+
+gitignore .env content/ data/ reports/ 
+
+---
+
+# Roadmap
+
+Planned improvements:
+
+- push drafts back to WordPress
+- configurable heuristics
+- plugin architecture
+- WooCommerce support
+- better markdown normalization
+- configurable language packs
+- snapshot tests
+- semantic clustering improvements
+- automatic fix generation
+- GitHub Actions integration
+- AI task pipelines
+
+---
+
+# Contributing
+
+Issues, ideas, and pull requests are welcome.
+
+The long-term goal is to make WordPress content easier to work with in modern AI-assisted development workflows.
