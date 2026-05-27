@@ -49,6 +49,7 @@ type ContentIndex = {
 type PageSignals = {
   item: IndexItem;
   url?: string;
+  canonicalUrl?: string;
   title: string;
   body: string;
   metaTitle?: string;
@@ -157,6 +158,8 @@ const FOCUS_KEYWORD_KEYS = [
 type AnchorLanguagePack = {
   genericAnchors: string[];
   stopwords: string[];
+  weakAnchorStartWords: string[];
+  weakAnchorEndWords: string[];
 };
 
 // Lightweight language packs for anchor filtering. These are broad editorial
@@ -208,6 +211,36 @@ const DEFAULT_LANGUAGE_PACK: AnchorLanguagePack = {
     "you",
     "your",
   ],
+  weakAnchorStartWords: [
+    "also",
+    "because",
+    "check",
+    "do",
+    "does",
+    "how",
+    "if",
+    "read",
+    "see",
+    "these",
+    "this",
+    "use",
+    "what",
+    "when",
+    "where",
+    "which",
+    "why",
+  ],
+  weakAnchorEndWords: [
+    "are",
+    "can",
+    "do",
+    "does",
+    "have",
+    "it",
+    "often",
+    "this",
+    "you",
+  ],
 };
 
 const DUTCH_LANGUAGE_PACK: AnchorLanguagePack = {
@@ -257,6 +290,30 @@ const DUTCH_LANGUAGE_PACK: AnchorLanguagePack = {
     "we",
     "zijn",
   ],
+  weakAnchorStartWords: [
+    "bekijk",
+    "deze",
+    "dit",
+    "gebruik",
+    "herken",
+    "hoe",
+    "lees",
+    "vaak",
+    "wanneer",
+    "waar",
+    "waarom",
+    "wat",
+    "welke",
+  ],
+  weakAnchorEndWords: [
+    "dan",
+    "deze",
+    "dit",
+    "hebt",
+    "je",
+    "kan",
+    "vaak",
+  ],
 };
 
 // TODO: Allow config/semantic.json to override or extend these packs, e.g.
@@ -271,6 +328,10 @@ function mergeLanguagePackValues(key: keyof AnchorLanguagePack) {
 
 const GENERIC_ANCHORS = mergeLanguagePackValues("genericAnchors");
 const ANCHOR_STOPWORDS = mergeLanguagePackValues("stopwords");
+// Product/domain terms should never be hardcoded here. Corpus-level keyword
+// frequency decides whether terms are broad for a specific site.
+const ANCHOR_START_WORDS = mergeLanguagePackValues("weakAnchorStartWords");
+const WEAK_ANCHOR_END_WORDS = mergeLanguagePackValues("weakAnchorEndWords");
 const EDITORIAL_WORDS = new Set([
   ...Array.from(GENERIC_ANCHORS).flatMap((anchor) => anchor.split(/\s+/)),
   "article",
@@ -308,7 +369,6 @@ const CTA_WORDS = new Set(
     "offerte",
   ].map(normalizeKeyword)
 );
-
 function cleanText(value: unknown) {
   return String(value ?? "")
     .replace(/<[^>]*>/g, " ")
@@ -403,6 +463,35 @@ function sameTarget(target: string | undefined, page: PageSignals) {
   );
 }
 
+function canonicalUrl(value?: string) {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    url.search = "";
+
+    return url.href.replace(/\/$/, "").toLowerCase();
+  } catch {
+    return value.replace(/[?#].*$/, "").replace(/\/$/, "").toLowerCase();
+  }
+}
+
+function samePage(first: PageSignals, second?: PageSignals) {
+  if (!second) {
+    return false;
+  }
+
+  return (
+    Boolean(first.item.path && first.item.path === second.item.path) ||
+    Boolean(first.item.slug && first.item.slug === second.item.slug) ||
+    Boolean(first.url && first.url === second.url) ||
+    Boolean(first.canonicalUrl && first.canonicalUrl === second.canonicalUrl)
+  );
+}
+
 function naturalAnchor(anchor: string) {
   const cleanAnchor = cleanText(anchor);
   const words = cleanAnchor.split(/\s+/).filter(Boolean);
@@ -427,11 +516,22 @@ function naturalAnchor(anchor: string) {
     return "";
   }
 
-  if (hasWeirdCapitalBoundary(words)) {
+  if (
+    hasWeirdCapitalBoundary(words) ||
+    startsWithWeakAnchorWord(words)
+  ) {
     return "";
   }
 
   return cleanAnchor;
+}
+
+function startsWithWeakAnchorWord(words: string[]) {
+  return ANCHOR_START_WORDS.has(normalizeKeyword(words[0] ?? ""));
+}
+
+function endsWithWeakAnchorWord(words: string[]) {
+  return WEAK_ANCHOR_END_WORDS.has(normalizeKeyword(words[words.length - 1] ?? ""));
 }
 
 function slugAnchor(slug?: string) {
@@ -523,7 +623,7 @@ function distinctiveTargetKeywords(page: PageSignals | undefined, stats: Keyword
   );
 }
 
-function stripNonSentenceBlocks(content: string) {
+function paragraphBlocks(content: string) {
   return content
     .replace(/```[\s\S]*?```/g, "\n")
     .replace(/<h[1-6][^>]*>[\s\S]*?<\/h[1-6]>/gi, "\n")
@@ -533,7 +633,8 @@ function stripNonSentenceBlocks(content: string) {
     .replace(/<ol[\s\S]*?<\/ol>/gi, "\n")
     .split(/\n{2,}|<\/p>|<br\s*\/?>/gi)
     .filter((block) => !isIgnoredAnchorBlock(block))
-    .join("\n");
+    .map(cleanText)
+    .filter((block) => block.length > 0);
 }
 
 function isIgnoredAnchorBlock(block: string) {
@@ -552,16 +653,18 @@ function isIgnoredAnchorBlock(block: string) {
 }
 
 function sentenceTexts(content: string) {
-  return stripNonSentenceBlocks(content)
-    .split(/(?<=[.!?])\s+|\n+/g)
-    .map(cleanText)
-    .filter((sentence) => {
-      return (
-        sentence.length >= 25 &&
-        /[.!?]$/.test(sentence) &&
-        !isIgnoredContextSentence(sentence)
-      );
-    });
+  return paragraphBlocks(content).flatMap((block) => {
+    return block
+      .split(/(?<=[.!?])\s+/g)
+      .map(cleanText)
+      .filter((sentence) => {
+        return (
+          sentence.length >= 25 &&
+          /[.!?]$/.test(sentence) &&
+          !isIgnoredContextSentence(sentence)
+        );
+      });
+  });
 }
 
 function isIgnoredContextSentence(sentence: string) {
@@ -576,7 +679,45 @@ function isIgnoredContextSentence(sentence: string) {
     return true;
   }
 
-  return isMostlyEditorialWords(keywords);
+  return (
+    isMostlyEditorialWords(keywords) ||
+    looksLikeTitleExcerptSentence(sentence) ||
+    repeatsOpeningPhrase(sentence)
+  );
+}
+
+function looksLikeTitleExcerptSentence(sentence: string) {
+  const [title, excerpt] = sentence.split(/:\s+/, 2);
+
+  return Boolean(
+    title &&
+      excerpt &&
+      title.split(/\s+/).length <= 9 &&
+      excerpt.toLowerCase().startsWith(title.toLowerCase().split(/\s+/)[0])
+  );
+}
+
+function repeatsOpeningPhrase(sentence: string) {
+  const words = cleanText(sentence).split(/\s+/);
+
+  if (words.length < 10) {
+    return false;
+  }
+
+  const opening = words.slice(0, 5).join(" ").toLowerCase();
+  const rest = words.slice(5).join(" ").toLowerCase();
+
+  return rest.includes(opening);
+}
+
+function isOverviewLikeSource(page: PageSignals) {
+  const internalLinks = page.item.internalLinks?.length ?? 0;
+  const blocks = paragraphBlocks(page.body);
+  const cardLikeBlocks = blocks.filter((block) => {
+    return looksLikeTitleExcerptSentence(block) || repeatsOpeningPhrase(block);
+  }).length;
+
+  return internalLinks >= 8 || cardLikeBlocks >= 3;
 }
 
 function phraseCandidates(content: string) {
@@ -715,6 +856,10 @@ function scoreAnchorCandidate(
     return 0;
   }
 
+  if (endsWithWeakAnchorWord(words) && distinctiveOverlap < 2) {
+    return 0;
+  }
+
   /*
    * Anchor scoring intentionally favors phrases already present in the source
    * copy, then rewards overlap with both source and target topics. This keeps
@@ -837,6 +982,10 @@ function scoreInsertionContext(
     return 0;
   }
 
+  if (isOverviewLikeSource(source) && distinctiveOverlap < 2) {
+    return 0;
+  }
+
   /*
    * Context scoring prefers readable sentences that already discuss the target
    * topic, then gives a small boost when the chosen anchor or source topic is
@@ -848,7 +997,8 @@ function scoreInsertionContext(
     anchorOverlap * 20 +
     Math.min(sourceOverlap, 3) * 5 +
     (words.length >= 12 && words.length <= 30 ? 15 : 0) -
-    (hasTooManyStopwords(words) ? 15 : 0)
+    (hasTooManyStopwords(words) ? 15 : 0) -
+    (isOverviewLikeSource(source) ? 35 : 0)
   );
 }
 
@@ -935,6 +1085,7 @@ function getTopLinkOpportunities(pages: PageSignals[]) {
     .flatMap((source) => {
       return (source.item.linkOpportunities ?? []).map((opportunity) => {
         const targetPage = getTargetPage(opportunity.target, pages);
+        const selfLink = samePage(source, targetPage);
         const anchor = getAnchorSuggestion(opportunity, source, targetPage, stats);
         const insertion = getInsertionSuggestion(source, targetPage, anchor, stats);
 
@@ -942,6 +1093,7 @@ function getTopLinkOpportunities(pages: PageSignals[]) {
           ...opportunity,
           source,
           targetPage,
+          selfLink,
           anchor,
           insertion,
           targetSpecificityScore: getTargetSpecificityScore(
@@ -957,6 +1109,7 @@ function getTopLinkOpportunities(pages: PageSignals[]) {
     .filter((opportunity) => {
       return (
         (opportunity.relevanceScore ?? 0) >= MIN_LINK_RELEVANCE_SCORE &&
+        !opportunity.selfLink &&
         opportunity.targetSpecificityScore >= MIN_TARGET_SPECIFICITY_SCORE &&
         opportunity.anchorAlignmentScore >= MIN_ANCHOR_ALIGNMENT_SCORE &&
         !isUtilityPage(opportunity.targetPage ?? opportunity.source) &&
@@ -974,12 +1127,14 @@ function getTopLinkOpportunities(pages: PageSignals[]) {
     })
     .filter((opportunity) => {
       const source = opportunity.source.item.path ?? "";
+      const target = opportunity.targetPage?.item.path ?? opportunity.target ?? "";
+      const pair = `${source} -> ${target}`;
 
-      if (seenSources.has(source)) {
+      if (seenSources.has(pair)) {
         return false;
       }
 
-      seenSources.add(source);
+      seenSources.add(pair);
       return true;
     })
     .slice(0, MAX_LINK_OPPORTUNITIES);
@@ -1302,10 +1457,12 @@ async function loadPageSignals(item: IndexItem): Promise<PageSignals> {
   const explicitMetaDescription = getStringValue(data, META_DESCRIPTION_KEYS);
   const excerpt = typeof data.excerpt === "string" ? cleanText(data.excerpt) : undefined;
   const title = cleanText(String(data.title ?? item.title ?? item.slug ?? item.path));
+  const url = typeof data.link === "string" ? data.link : undefined;
 
   return {
     item,
-    url: typeof data.link === "string" ? data.link : undefined,
+    url,
+    canonicalUrl: canonicalUrl(url),
     title,
     body: parsed.content,
     metaTitle: explicitMetaTitle ?? title,
