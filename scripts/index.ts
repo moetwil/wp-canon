@@ -77,10 +77,40 @@ const BUILT_IN_EXCLUDE_FROM_OPPORTUNITIES = [
   "terms",
   "voorwaarden",
 ];
+const BUILT_IN_FALLBACK_ANCHOR_FILLER_WORDS = [
+  "best",
+  "deze",
+  "dit",
+  "doe",
+  "guide",
+  "helpt",
+  "herken",
+  "hoe",
+  "how",
+  "is",
+  "meest",
+  "oorzaak",
+  "oorzaken",
+  "these",
+  "this",
+  "tips",
+  "vaak",
+  "waar",
+  "wanneer",
+  "waarom",
+  "wat",
+  "what",
+  "welke",
+  "when",
+  "where",
+  "why",
+  "zo",
+];
 const GENERIC_ANCHORS = new Set(["klik hier", "lees meer", "hier"]);
 let stopwords = new Set(BUILT_IN_STOPWORDS);
 let weakTerms = new Set(BUILT_IN_WEAK_TERMS);
 let excludeFromOpportunities = new Set(BUILT_IN_EXCLUDE_FROM_OPPORTUNITIES);
+let fallbackAnchorFillerWords = new Set(BUILT_IN_FALLBACK_ANCHOR_FILLER_WORDS);
 
 function comparableHostname(hostname: string) {
   return hostname.toLowerCase().replace(/^www\./, "");
@@ -250,6 +280,10 @@ async function loadSemanticConfig() {
   excludeFromOpportunities = new Set([
     ...BUILT_IN_EXCLUDE_FROM_OPPORTUNITIES,
     ...normalizeKeywordList(config.excludeFromOpportunities ?? []),
+  ]);
+  fallbackAnchorFillerWords = new Set([
+    ...BUILT_IN_FALLBACK_ANCHOR_FILLER_WORDS,
+    ...normalizeKeywordList(config.fallbackAnchorFillerWords ?? []),
   ]);
 }
 
@@ -426,7 +460,6 @@ function isExcludedFromOpportunities(item: any) {
 
 function getAnchorSuggestions(
   target: any,
-  specificKeywords: string[],
   matchingHeadings: string[]
 ) {
   const title = cleanAnchorText(target.title);
@@ -435,13 +468,11 @@ function getAnchorSuggestions(
     .map(cleanAnchorText)
     .find((anchor) => isNaturalAnchor(anchor));
   const semanticAnchor = cleanAnchorText(target.semanticCluster?.replace(/-/g, " "));
-  const keywordAnchor = getAnchorKeywordPhrase(specificKeywords);
   const suggestions = [
-    title.length <= 60 ? title : "",
     slugAnchor,
+    title.length <= 60 ? title : "",
     headingAnchor ?? "",
     isNaturalAnchor(semanticAnchor) ? semanticAnchor : "",
-    keywordAnchor,
   ];
   const seen = new Set<string>();
 
@@ -466,22 +497,6 @@ function getAnchorSuggestions(
     .slice(0, 3);
 }
 
-function getAnchorKeywordPhrase(keywords: string[]) {
-  const cleanKeywords = getSpecificKeywords(keywords)
-    .filter((keyword) => keyword.length > 3)
-    .filter((keyword, index, all) => {
-      return !all.some((other, otherIndex) => {
-        return (
-          otherIndex < index &&
-          (other.includes(keyword) || keyword.includes(other))
-        );
-      });
-    });
-  const phrase = cleanKeywords.slice(0, 3).join(" ");
-
-  return isNaturalAnchor(phrase) ? phrase : "";
-}
-
 function cleanAnchorText(value: string) {
   return cleanText(String(value ?? ""))
     .replace(/[_|/\\]+/g, " ")
@@ -491,7 +506,19 @@ function cleanAnchorText(value: string) {
 }
 
 function getSlugAnchorPhrase(slug: string) {
-  const phrase = cleanAnchorText(String(slug ?? "").replace(/[-_]+/g, " "));
+  const words = String(slug ?? "")
+    .toLowerCase()
+    .replace(/[-_]+/g, " ")
+    .split(/[^a-zA-Z0-9À-ÿ]+/i)
+    .map(normalizeKeyword)
+    .filter((word) => {
+      return (
+        word.length > 1 &&
+        !/^\d+$/.test(word) &&
+        !fallbackAnchorFillerWords.has(word)
+      );
+    });
+  const phrase = cleanAnchorText(words.slice(0, 5).join(" "));
 
   return isNaturalAnchor(phrase) ? phrase : "";
 }
@@ -659,7 +686,6 @@ function getLinkOpportunities(item: any, items: any[]) {
           relevanceScore,
           suggestedAnchors: getAnchorSuggestions(
             target,
-            Array.from(specificKeywordOverlap),
             matchingHeadings
           ),
         },

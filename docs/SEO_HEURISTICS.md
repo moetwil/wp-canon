@@ -67,10 +67,14 @@ Avoid:
 - weak endings
 - generic section labels
 
-Fallback anchors may use:
-- target titles
-- slugs
-- configured patterns
+Fallback anchors:
+- prefer the target slug over the target title
+- convert slugs to lowercase readable phrases
+- remove language-pack filler or intent words
+- keep original word order
+- prefer 2-5 word topic phrases
+- trim broad corpus terms only when a distinctive leading phrase remains
+- use the target title only when the slug is missing or unusable
 
 ---
 

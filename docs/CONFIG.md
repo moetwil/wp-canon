@@ -49,6 +49,7 @@ config/language-packs/nl.json
 Could contain:
 - stopwords
 - generic anchors
+- fallback anchor filler and intent words
 - weak phrase patterns
 - language heuristics
 

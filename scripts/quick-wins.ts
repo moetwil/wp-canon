@@ -158,6 +158,7 @@ const FOCUS_KEYWORD_KEYS = [
 
 type AnchorLanguagePack = {
   genericAnchors: string[];
+  fallbackAnchorFillerWords: string[];
   stopwords: string[];
   weakAnchorStartWords: string[];
   weakAnchorEndWords: string[];
@@ -181,6 +182,19 @@ const DEFAULT_LANGUAGE_PACK: AnchorLanguagePack = {
     "see also",
     "sources",
     "summary",
+  ],
+  fallbackAnchorFillerWords: [
+    "best",
+    "guide",
+    "how",
+    "is",
+    "these",
+    "this",
+    "tips",
+    "what",
+    "when",
+    "where",
+    "why",
   ],
   stopwords: [
     "a",
@@ -259,6 +273,25 @@ const DUTCH_LANGUAGE_PACK: AnchorLanguagePack = {
     "snelle samenvatting",
     "veelgestelde vragen",
   ],
+  fallbackAnchorFillerWords: [
+    "deze",
+    "dit",
+    "doe",
+    "helpt",
+    "herken",
+    "hoe",
+    "is",
+    "meest",
+    "oorzaak",
+    "oorzaken",
+    "vaak",
+    "waar",
+    "wanneer",
+    "waarom",
+    "wat",
+    "welke",
+    "zo",
+  ],
   stopwords: [
     "aan",
     "als",
@@ -329,6 +362,9 @@ function mergeLanguagePackValues(key: keyof AnchorLanguagePack) {
 
 const GENERIC_ANCHORS = mergeLanguagePackValues("genericAnchors");
 const ANCHOR_STOPWORDS = mergeLanguagePackValues("stopwords");
+const FALLBACK_ANCHOR_FILLER_WORDS = mergeLanguagePackValues(
+  "fallbackAnchorFillerWords"
+);
 // Product/domain terms should never be hardcoded here. Corpus-level keyword
 // frequency decides whether terms are broad for a specific site.
 const ANCHOR_START_WORDS = mergeLanguagePackValues("weakAnchorStartWords");
@@ -535,8 +571,99 @@ function endsWithWeakAnchorWord(words: string[]) {
   return WEAK_ANCHOR_END_WORDS.has(normalizeKeyword(words[words.length - 1] ?? ""));
 }
 
-function slugAnchor(slug?: string) {
-  return naturalAnchor(String(slug ?? "").replace(/[-_]+/g, " "));
+function cleanFallbackAnchorValue(value?: string) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[-_]+/g, " ");
+}
+
+function fallbackAnchorWords(value?: string) {
+  return cleanFallbackAnchorValue(value)
+    .split(/[^a-zA-Z0-9À-ÿ]+/i)
+    .map(normalizeKeyword)
+    .filter((word) => {
+      return (
+        word.length > 1 &&
+        !/^\d+$/.test(word) &&
+        !FALLBACK_ANCHOR_FILLER_WORDS.has(word)
+      );
+    });
+}
+
+function phraseFromWords(words: string[]) {
+  return naturalAnchor(words.join(" "));
+}
+
+function trimBroadSuffix(words: string[], target: PageSignals, stats: KeywordStats) {
+  let end = words.length;
+
+  while (
+    end > 2 &&
+    isBroadKeyword(words[end - 1] ?? "", stats) &&
+    !isDistinctiveConnectorPhrase(words.slice(0, end), target, stats)
+  ) {
+    end -= 1;
+  }
+
+  const firstBroadIndex = words.findIndex((word) => isBroadKeyword(word, stats));
+
+  if (firstBroadIndex >= 2) {
+    return words.slice(0, firstBroadIndex);
+  }
+
+  return words.slice(0, end);
+}
+
+function isDistinctiveConnectorPhrase(
+  words: string[],
+  target: PageSignals,
+  stats: KeywordStats
+) {
+  const distinctive = distinctiveTargetKeywords(target, stats);
+
+  return words.some((word, index) => {
+    return (
+      ANCHOR_STOPWORDS.has(word) &&
+      words.slice(index + 1).some((laterWord) => distinctive.has(laterWord))
+    );
+  });
+}
+
+function bestOrderedFallbackPhrase(words: string[]) {
+  for (let size = Math.min(5, words.length); size >= 2; size -= 1) {
+    const phrase = phraseFromWords(words.slice(0, size));
+
+    if (phrase) {
+      return phrase;
+    }
+  }
+
+  return "";
+}
+
+function fallbackAnchorFromValue(
+  value: string | undefined,
+  target: PageSignals,
+  stats: KeywordStats
+) {
+  const words = fallbackAnchorWords(value);
+
+  if (words.length < 2) {
+    return "";
+  }
+
+  const suffixTrimmedWords = trimBroadSuffix(words, target, stats);
+  const suffixTrimmedPhrase = bestOrderedFallbackPhrase(suffixTrimmedWords);
+
+  if (suffixTrimmedPhrase) {
+    return suffixTrimmedPhrase;
+  }
+
+  return bestOrderedFallbackPhrase(words);
+}
+
+function slugAnchor(target: PageSignals, stats: KeywordStats) {
+  return fallbackAnchorFromValue(target.item.slug, target, stats);
 }
 
 function keywordList(value: string) {
@@ -786,25 +913,20 @@ function isFullLongTitle(anchor: string, target?: PageSignals) {
   return normalizeKeyword(anchor) === normalizeKeyword(target.title) && anchor.split(/\s+/).length > 5;
 }
 
-function getFallbackAnchor(target?: PageSignals) {
+function getFallbackAnchor(target: PageSignals | undefined, stats: KeywordStats) {
   if (!target) {
     return "";
   }
 
-  const titleAnchor = naturalAnchor(target.title);
+  const slugFallback = slugAnchor(target, stats);
 
-  if (titleAnchor && !isFullLongTitle(titleAnchor, target)) {
-    return titleAnchor;
+  if (slugFallback) {
+    return slugFallback;
   }
 
-  const titleWords = cleanText(target.title).split(/\s+/);
-  const titleKeywords = keywordList(target.title);
-  const phraseWords = titleWords.filter((word) => {
-    return titleKeywords.includes(normalizeKeyword(word));
-  });
-  const phrase = naturalAnchor(phraseWords.slice(0, 5).join(" "));
+  const titleFallback = fallbackAnchorFromValue(target.title, target, stats);
 
-  return phrase || slugAnchor(target.item.slug);
+  return isFullLongTitle(titleFallback, target) ? "" : titleFallback;
 }
 
 function getFallbackAnchorSuggestion(
@@ -812,7 +934,7 @@ function getFallbackAnchorSuggestion(
   target: PageSignals | undefined,
   stats: KeywordStats
 ): AnchorSuggestion | undefined {
-  const fallback = getFallbackAnchor(target);
+  const fallback = getFallbackAnchor(target, stats);
   const score = scoreAnchorCandidate(fallback, source, target, stats, false);
 
   if (!fallback || score === 0) {
