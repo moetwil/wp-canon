@@ -10,6 +10,7 @@ const MAX_STRUCTURE_ITEMS = 10;
 const MIN_LINK_RELEVANCE_SCORE = 60;
 const MIN_TARGET_SPECIFICITY_SCORE = 25;
 const MIN_ANCHOR_ALIGNMENT_SCORE = 35;
+const EXISTING_ANCHOR_SCORE_MARGIN = 35;
 const LOW_INBOUND_LINK_COUNT = 1;
 const TITLE_MIN_LENGTH = 30;
 const TITLE_MAX_LENGTH = 60;
@@ -806,6 +807,26 @@ function getFallbackAnchor(target?: PageSignals) {
   return phrase || slugAnchor(target.item.slug);
 }
 
+function getFallbackAnchorSuggestion(
+  source: PageSignals,
+  target: PageSignals | undefined,
+  stats: KeywordStats
+): AnchorSuggestion | undefined {
+  const fallback = getFallbackAnchor(target);
+  const score = scoreAnchorCandidate(fallback, source, target, stats, false);
+
+  if (!fallback || score === 0) {
+    return undefined;
+  }
+
+  return {
+    text: fallback,
+    confidence: "low",
+    source: "fallback",
+    score,
+  };
+}
+
 function anchorWords(anchor: string) {
   return new Set(keywordList(anchor));
 }
@@ -861,12 +882,12 @@ function scoreAnchorCandidate(
   }
 
   /*
-   * Anchor scoring intentionally favors phrases already present in the source
-   * copy, then rewards overlap with both source and target topics. This keeps
-   * suggestions actionable while avoiding section labels and random fragments.
+   * Anchor scoring rewards target-specific phrase alignment. Existing phrases
+   * get a small bonus, but fallback target anchors are the default selection
+   * strategy so arbitrary source fragments do not dominate the report.
    */
   return (
-    (existsInSource ? 45 : 0) +
+    (existsInSource ? 10 : 0) +
     distinctiveOverlap * 45 +
     targetOverlap * 25 +
     sourceOverlap * 15 +
@@ -926,17 +947,22 @@ function getAnchorSuggestion(
   target: PageSignals | undefined,
   stats: KeywordStats
 ): AnchorSuggestion | undefined {
+  const fallbackAnchor = getFallbackAnchorSuggestion(source, target, stats);
   const existingAnchor = getBestExistingAnchor(source, target, stats);
 
-  if (existingAnchor && existingAnchor.score >= 85) {
+  if (
+    existingAnchor &&
+    fallbackAnchor &&
+    existingAnchor.score >= fallbackAnchor.score + EXISTING_ANCHOR_SCORE_MARGIN
+  ) {
     return existingAnchor;
   }
 
-  const fallbackCandidates = [
-    getFallbackAnchor(target),
-    ...(opportunity.suggestedAnchors ?? []),
-  ];
-  const fallback = fallbackCandidates
+  if (fallbackAnchor) {
+    return fallbackAnchor;
+  }
+
+  const secondaryFallback = (opportunity.suggestedAnchors ?? [])
     .map((candidate) => naturalAnchor(candidate))
     .filter(Boolean)
     .map((candidate) => {
@@ -950,8 +976,8 @@ function getAnchorSuggestion(
     .filter((anchor) => anchor.score > 0)
     .sort((a, b) => b.score - a.score || a.text.length - b.text.length)[0];
 
-  if (fallback) {
-    return fallback;
+  if (secondaryFallback) {
+    return secondaryFallback;
   }
 
   return existingAnchor
