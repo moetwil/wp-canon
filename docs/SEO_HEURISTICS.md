@@ -1,0 +1,127 @@
+# SEO Heuristics
+
+This document describes the philosophy behind SEO scoring and recommendations inside WP Canon.
+
+The goal is actionable signal, not noisy automation.
+
+---
+
+# General Principles
+
+- Prefer quality over quantity.
+- Avoid overwhelming reports.
+- Avoid obvious SEO spam patterns.
+- Keep recommendations human-reviewable.
+- Keep logic generic for any WordPress site.
+
+---
+
+# Internal Linking
+
+## Good Internal Links
+
+A good suggestion:
+- is contextually relevant
+- matches the target topic closely
+- uses natural anchor text
+- avoids arbitrary fragments
+- avoids self-links
+
+## Bad Internal Links
+
+Avoid:
+- generic anchors
+- sentence fragments
+- repeated boilerplate
+- CTA text
+- overview-card excerpts
+- links based only on broad shared words
+
+---
+
+# Broad vs Distinctive Keywords
+
+Broad/common terms should be detected dynamically from the corpus.
+
+Examples:
+- "guide"
+- "tips"
+- "blog"
+
+These should not dominate scoring.
+
+Distinctive target keywords should carry more weight.
+
+---
+
+# Anchor Text Rules
+
+Prefer:
+- concise noun/topic phrases
+- target-specific wording
+- naturally occurring phrases
+
+Avoid:
+- arbitrary sentence fragments
+- pronoun-heavy phrases
+- weak endings
+- generic section labels
+
+Fallback anchors may use:
+- target titles
+- slugs
+- configured patterns
+
+---
+
+# Metadata Checks
+
+Current metadata checks:
+- title length
+- description length
+- missing metadata
+- optional focus keyword presence
+
+Future:
+- CTR optimization
+- title uniqueness
+- intent alignment
+
+---
+
+# Thin Content
+
+Thin content should:
+- be informationally weak
+- lack depth
+- lack structure
+
+Word count alone should not fully determine quality.
+
+---
+
+# Orphan Pages
+
+Pages with low internal links may:
+- struggle to rank
+- receive little crawl attention
+- lack topical integration
+
+Suggestions should prioritize:
+- relevant hubs
+- strong semantic overlap
+- existing topical clusters
+
+---
+
+# Configurability
+
+Heuristics should become configurable where possible:
+
+```text
+config/
+config/language-packs/
+config/semantic.json
+```
+
+Avoid hardcoded domain-specific logic.
