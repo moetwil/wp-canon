@@ -16,6 +16,7 @@ import type {
 } from "./types";
 
 const EXISTING_ANCHOR_SCORE_MARGIN = 35;
+const ENABLE_EXISTING_PHRASE_ANCHORS = false;
 
 export function naturalAnchor(anchor: string) {
   const cleanAnchor = cleanText(anchor);
@@ -558,6 +559,11 @@ export function getAnchorSuggestion(
   stats: KeywordStats
 ): AnchorSuggestion | undefined {
   const fallbackAnchor = getFallbackAnchorSuggestion(source, target, stats);
+
+  if (!ENABLE_EXISTING_PHRASE_ANCHORS) {
+    return fallbackAnchor;
+  }
+
   const existingAnchor = getBestExistingAnchor(source, target, stats);
 
   if (

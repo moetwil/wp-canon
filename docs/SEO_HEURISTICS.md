@@ -76,6 +76,13 @@ Fallback anchors:
 - trim broad corpus terms only when a distinctive leading phrase remains
 - use the target title only when the slug is missing or unusable
 
+Existing phrase anchors:
+- are currently disabled by default in quick-wins output
+- may find phrases that already appear in the source page, but those phrases can still be editorially weak or too sentence-like
+- are kept in the codebase for future use behind configuration
+
+Quick-wins currently prefers slug/title-derived fallback anchors for reliability. Reports label these as `Suggested anchor idea` so editors can place or adapt the anchor naturally inside the suggested insertion context.
+
 ---
 
 # Metadata Checks
